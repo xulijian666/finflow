@@ -5,6 +5,7 @@ import 'package:excel/excel.dart' as excel;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -869,16 +870,63 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    _exitToastEntry?.remove();
+    _exitToastEntry = null;
     _tabController.dispose();
     _recordScrollController.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
+  void _showExitToast() {
+    if (_exitToastEntry != null) {
+      return;
+    }
+    final entry = OverlayEntry(
+      builder: (context) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.5),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text(
+              '再按一次退出',
+              style: TextStyle(color: Colors.white, fontSize: 16),
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(entry);
+    _exitToastEntry = entry;
+    Future.delayed(const Duration(seconds: 3), () {
+      if (_exitToastEntry == entry) {
+        _exitToastEntry?.remove();
+        _exitToastEntry = null;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // 主界面结构
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final now = DateTime.now();
+        if (_lastPressedAt == null ||
+            now.difference(_lastPressedAt!) > const Duration(seconds: 3)) {
+          _lastPressedAt = now;
+          _showExitToast();
+        } else {
+          await SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1039,6 +1087,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               ),
             )
           : null,
+      ),
     );
   }
 
