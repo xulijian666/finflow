@@ -12,7 +12,7 @@ class RecordDatabase {
   RecordDatabase._internal();
 
   static final RecordDatabase instance = RecordDatabase._internal();
-  static const String _dbName = 'finflow.db';
+  static const String _dbName = 'finflow.db'; 
   static const String _assetDbPath = 'assets/finflow.db';
   static const String _tableName = 'records';
   static const String _billTableName = 'bills';
@@ -23,6 +23,95 @@ class RecordDatabase {
   static const String _defaultAccountName = '默认账户';
 
   sqflite.Database? _database;
+
+  Future<String> getDatabasePath() async {
+    final directory = await getApplicationDocumentsDirectory();
+    return p.join(directory.path, _dbName);
+  }
+
+  Future<void> close() async {
+    final db = _database;
+    if (db != null) {
+      await db.close();
+      _database = null;
+    }
+  }
+
+  Future<String> backup() async {
+    final dbPath = await getDatabasePath();
+    final directory = await getApplicationDocumentsDirectory();
+    final backupDir = Directory(p.join(directory.path, 'backups'));
+    if (!await backupDir.exists()) {
+      await backupDir.create(recursive: true);
+    }
+
+    final now = DateTime.now();
+    final timestamp =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+    final backupPath = p.join(backupDir.path, 'finflow_backup_$timestamp.db');
+
+    // 确保数据库已落盘
+    final db = await database;
+    try {
+      await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
+    } catch (_) {}
+    
+    await File(dbPath).copy(backupPath);
+    await _cleanOldBackups(backupDir);
+    return backupPath;
+  }
+
+  Future<void> _cleanOldBackups(Directory backupDir) async {
+    try {
+      final entities = await backupDir.list().toList();
+      final backups = entities.whereType<File>().where((file) {
+        return p.basename(file.path).startsWith('finflow_backup_') &&
+            p.basename(file.path).endsWith('.db');
+      }).toList();
+
+      if (backups.length > 3) {
+        // 按修改时间排序，最旧的在前面
+        backups.sort((a, b) => a.lastModifiedSync().compareTo(b.lastModifiedSync()));
+        final toDelete = backups.sublist(0, backups.length - 3);
+        for (final file in toDelete) {
+          await file.delete();
+        }
+      }
+    } catch (e) {
+      print('清理旧备份失败: $e');
+    }
+  }
+
+  Future<List<File>> getBackups() async {
+    final directory = await getApplicationDocumentsDirectory();
+    final backupDir = Directory(p.join(directory.path, 'backups'));
+    if (!await backupDir.exists()) {
+      return [];
+    }
+
+    final entities = await backupDir.list().toList();
+    final backups = entities.whereType<File>().where((file) {
+      return p.basename(file.path).startsWith('finflow_backup_') &&
+          p.basename(file.path).endsWith('.db');
+    }).toList();
+
+    // 按修改时间倒序排列，最新的在前面
+    backups.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+    return backups;
+  }
+
+  Future<void> restore(String sourcePath) async {
+    await close();
+    final dbPath = await getDatabasePath();
+    final sourceFile = File(sourcePath);
+    if (await sourceFile.exists()) {
+       await sourceFile.copy(dbPath);
+    } else {
+       throw Exception('备份文件不存在');
+    }
+    // 重新初始化连接
+    await database;
+  }
 
   Future<sqflite.Database> get database async {
     final existing = _database;
@@ -660,6 +749,11 @@ class RecordDatabase {
       map[id] = (value is num) ? value.toDouble() : 0;
     }
     return map;
+  }
+
+  Future<void> clearAllRecords() async {
+    final db = await database;
+    await db.delete(_tableName);
   }
 
   int get defaultBillId => _defaultBillId;

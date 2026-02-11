@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/record_database.dart';
 import '../data/transaction_record.dart';
@@ -21,6 +22,9 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
+  static const String _prefKeyBillId = 'selected_bill_id';
+  static const String _prefKeyAccountId = 'selected_account_id';
+
   List<TransactionRecord> _records = [];
   List<Bill> _bills = [];
   List<Account> _accounts = [];
@@ -62,6 +66,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   Future<void> _initDefaults() async {
     try {
       await RecordDatabase.instance.ensureDefaultBillAndAccount();
+      await _loadPreferences();
     } catch (error) {
       debugPrint('初始化默认账本与账户失败：$error');
     }
@@ -248,6 +253,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (!mounted) {
         return;
       }
+      if (_currentBillId != nextBillId) {
+        _saveSelectedBill(nextBillId);
+      }
       setState(() {
         _bills = bills;
         _currentBillId = nextBillId;
@@ -279,11 +287,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (!mounted) {
         return;
       }
+      final nextAccountId = currentExists ? currentId : fallbackId;
+      if (_currentAccountId != nextAccountId && nextAccountId != null) {
+        _saveSelectedAccount(nextAccountId);
+      }
       setState(() {
         _accounts = accounts;
         _accountBalances = balances;
         _defaultAccountId = fallbackId;
-        _currentAccountId = currentExists ? currentId : fallbackId;
+        _currentAccountId = nextAccountId;
         _loadingAccounts = false;
         _editingAccountId = null;
       });
@@ -364,6 +376,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     setState(() {
       _currentBillId = bill.id;
     });
+    if (bill.id != null) {
+      _saveSelectedBill(bill.id!);
+    }
     _loadRecords();
   }
 
@@ -461,6 +476,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       setState(() {
         _currentBillId = newId;
       });
+      _saveSelectedBill(newId);
       _loadBills();
       _showMessage('账本已新增');
     } catch (error) {
@@ -619,6 +635,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       }
       if (_currentBillId == billId) {
         _currentBillId = RecordDatabase.instance.defaultBillId;
+        _saveSelectedBill(RecordDatabase.instance.defaultBillId);
       }
       _loadBills();
       _showMessage('账本已删除');
@@ -728,6 +745,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     setState(() {
       _currentAccountId = account.id;
     });
+    _saveSelectedAccount(account.id!);
   }
 
   Future<void> _confirmDeleteAccount(Account account) async {
@@ -776,6 +794,40 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       }
     }
     return '默认账本';
+  }
+
+  Future<void> _loadPreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final billId = prefs.getInt(_prefKeyBillId);
+      final accountId = prefs.getInt(_prefKeyAccountId);
+      if (mounted) {
+        setState(() {
+          if (billId != null) _currentBillId = billId;
+          if (accountId != null) _currentAccountId = accountId;
+        });
+      }
+    } catch (e) {
+      debugPrint('加载偏好设置失败: $e');
+    }
+  }
+
+  Future<void> _saveSelectedBill(int id) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefKeyBillId, id);
+    } catch (e) {
+      debugPrint('保存账本选择失败: $e');
+    }
+  }
+
+  Future<void> _saveSelectedAccount(int id) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefKeyAccountId, id);
+    } catch (e) {
+      debugPrint('保存账户选择失败: $e');
+    }
   }
 
   @override
@@ -1201,6 +1253,41 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           children: [
             Expanded(
               child: Text(
+                '数据备份与恢复',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.backup, color: Color(0xFF1B7F5A)),
+                title: const Text('立即备份'),
+                subtitle: const Text('创建当前数据的快照'),
+                onTap: _backupData,
+              ),
+              const Divider(height: 1, indent: 16, endIndent: 16),
+              ListTile(
+                leading: const Icon(Icons.restore, color: Color(0xFFB5473B)),
+                title: const Text('恢复数据'),
+                subtitle: const Text('从快照或外部文件恢复'),
+                onTap: _showRestoreDialog,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
                 '账单数据导出',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
@@ -1226,8 +1313,339 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             ),
           ),
         ),
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '危险区域',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: const Color(0xFFB5473B),
+                    ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Card(
+          elevation: 0,
+          color: const Color(0xFFFEECEB),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: ListTile(
+            leading: const Icon(Icons.delete_forever, color: Color(0xFFB5473B)),
+            title: const Text(
+              '数据格式化',
+              style: TextStyle(color: Color(0xFFB5473B)),
+            ),
+            subtitle: const Text(
+              '清空所有记账数据（自动备份）',
+              style: TextStyle(color: Color(0xFFB5473B)),
+            ),
+            onTap: _showFormatDialog,
+          ),
+        ),
       ],
     );
+  }
+
+  Future<void> _showFormatDialog() async {
+    final controller = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('数据格式化'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '此操作将清空所有记账数据（records表），但会保留账本与账户设置。\n\n'
+                '为了安全起见，系统将在清空前自动创建一个备份。\n\n'
+                '请输入以下文字确认操作：',
+                style: TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              const SelectableText(
+                '我确认要将数据清空',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFB5473B),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  hintText: '请输入确认文本',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB5473B),
+              ),
+              onPressed: () {
+                if (controller.text.trim() == '我确认要将数据清空') {
+                  Navigator.of(context).pop(true);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('输入文本不匹配')),
+                  );
+                }
+              },
+              child: const Text('确认清空'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      await _executeFormat();
+    }
+  }
+
+  Future<void> _executeFormat() async {
+    // 显示加载对话框
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return const Center(child: CircularProgressIndicator());
+      },
+    );
+
+    try {
+      // 1. 执行自动备份
+      final backupPath = await RecordDatabase.instance.backup();
+      debugPrint('格式化前自动备份完成：$backupPath');
+
+      // 2. 清空数据
+      await RecordDatabase.instance.clearAllRecords();
+      debugPrint('数据已清空');
+
+      if (!mounted) return;
+      // 关闭加载对话框
+      Navigator.of(context).pop();
+
+      // 3. 刷新界面
+      _loadRecords();
+      _loadAccounts(); // 余额会变动
+      
+      _showMessage('数据已格式化，自动备份已创建');
+    } catch (e) {
+      if (!mounted) return;
+      // 关闭加载对话框
+      Navigator.of(context).pop();
+      _showMessage('操作失败: $e');
+    }
+  }
+
+  Future<void> _backupData() async {
+    try {
+      final path = await RecordDatabase.instance.backup();
+      if (!mounted) {
+        return;
+      }
+      _showMessage('备份成功');
+      // 可以在这里询问是否要立即导出到外部
+      final shouldExport = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('备份已创建'),
+            content: const Text('建议将备份文件导出到微信或云盘，防止卸载丢失。\n是否立即导出？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('稍后'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('立即导出'),
+              ),
+            ],
+          );
+        },
+      );
+      if (shouldExport == true) {
+        final xFiles = [XFile(path)];
+        await Share.shareXFiles(xFiles, text: 'FinFlow 数据备份');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('备份失败: $e');
+    }
+  }
+
+  Future<void> _showRestoreDialog() async {
+    final backups = await RecordDatabase.instance.getBackups();
+    if (!mounted) return;
+
+    await showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '恢复数据',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      TextButton.icon(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _restoreFromExternalFile();
+                        },
+                        icon: const Icon(Icons.file_open),
+                        label: const Text('从外部文件导入'),
+                      ),
+                    ],
+                  ),
+                ),
+                if (backups.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Text('暂无本地快照，请先备份或从外部导入'),
+                  ),
+                if (backups.isNotEmpty)
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: backups.length,
+                      itemBuilder: (context, index) {
+                        final file = backups[index];
+                        final name = p.basename(file.path);
+                        // 提取时间戳并格式化
+                        String displayTime = name;
+                        try {
+                          final timestamp = name.split('_')[2].split('.')[0];
+                          if (timestamp.length >= 14) {
+                             final year = timestamp.substring(0, 4);
+                             final month = timestamp.substring(4, 6);
+                             final day = timestamp.substring(6, 8);
+                             final hour = timestamp.substring(9, 11);
+                             final minute = timestamp.substring(11, 13);
+                             final second = timestamp.substring(13, 15);
+                             displayTime = '$year-$month-$day $hour:$minute:$second';
+                          }
+                        } catch (_) {}
+
+                        return ListTile(
+                          leading: const Icon(Icons.history),
+                          title: Text(displayTime),
+                          subtitle: Text(
+                            '${(file.lengthSync() / 1024).toStringAsFixed(1)} KB',
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                               IconButton(
+                                icon: const Icon(Icons.share, size: 20),
+                                onPressed: () {
+                                  Share.shareXFiles([XFile(file.path)]);
+                                },
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.restore, color: Color(0xFFB5473B)),
+                                onPressed: () {
+                                  Navigator.pop(context);
+                                  _confirmRestore(file.path);
+                                },
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text(
+                      '注意：卸载 App 前请务必执行“导出”，否则数据将丢失！',
+                      style: TextStyle(color: Colors.red, fontSize: 12),
+                    ),
+                  ),
+                const SizedBox(height: 16),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _restoreFromExternalFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles();
+      if (result != null && result.files.single.path != null) {
+        final path = result.files.single.path!;
+        if (!path.endsWith('.db')) {
+             _showMessage('请选择正确的 .db 备份文件');
+             return;
+        }
+        await _confirmRestore(path);
+      }
+    } catch (e) {
+      _showMessage('选择文件失败: $e');
+    }
+  }
+
+  Future<void> _confirmRestore(String path) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('确认恢复？'),
+          content: const Text('恢复操作将覆盖当前所有数据，且不可撤销。\n建议恢复前先执行一次备份。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('确定恢复'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      try {
+        await RecordDatabase.instance.restore(path);
+        if (!mounted) return;
+        _showMessage('数据恢复成功');
+        // 刷新页面数据
+        _loadBills();
+        _loadAccounts();
+        _loadRecords();
+      } catch (e) {
+        if (!mounted) return;
+        _showMessage('恢复失败: $e');
+      }
+    }
   }
 
   List<Widget> _buildGroupedRecords() {
