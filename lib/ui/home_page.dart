@@ -12,8 +12,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/record_database.dart';
 import '../data/transaction_record.dart';
+import 'extension_menu.dart';
 import 'record_form_sheet.dart';
 
+// 首页：记账列表、管理入口与导入导出
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -22,26 +24,32 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
+  // 持久化键值
   static const String _prefKeyBillId = 'selected_bill_id';
   static const String _prefKeyAccountId = 'selected_account_id';
 
+  // 列表数据与账户余额
   List<TransactionRecord> _records = [];
   List<Bill> _bills = [];
   List<Account> _accounts = [];
   Map<int, double> _accountBalances = {};
+  // 列表加载状态
   bool _loading = true;
   bool _loadingError = false;
   bool _loadingBills = true;
   bool _loadingAccounts = true;
   bool _loadingMore = false;
   bool _hasMore = true;
+  // 搜索与分页缓存
   String _keyword = '';
   final List<String> _loadedDateKeys = [];
+  // 当前选择状态
   int? _currentBillId;
   int? _defaultAccountId;
   int? _currentAccountId;
   int? _editingBillId;
   int? _editingAccountId;
+  // UI 控制器
   late TabController _tabController;
   int _currentTabIndex = 0;
   final ScrollController _recordScrollController = ScrollController();
@@ -51,6 +59,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   @override
   void initState() {
     super.initState();
+    // 初始化双 Tab 控制器
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
       if (_currentTabIndex != _tabController.index) {
@@ -60,9 +69,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       }
     });
     _recordScrollController.addListener(_handleScroll);
+    // 初始化默认账本与账户
     _initDefaults();
   }
 
+  // 启动时确保默认账本与账户可用，并恢复上次选择
   Future<void> _initDefaults() async {
     try {
       await RecordDatabase.instance.ensureDefaultBillAndAccount();
@@ -82,6 +93,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (billId == null) {
       return;
     }
+    // 重置加载状态
     setState(() {
       _loading = true;
       _loadingError = false;
@@ -91,6 +103,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     });
     try {
       final keyword = _keyword.trim();
+      // 搜索模式直接查询全部匹配记录
       if (keyword.isNotEmpty) {
         final records = await RecordDatabase.instance.fetchRecordsByKeyword(
           billId: billId,
@@ -129,6 +142,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (billId == null) {
       return;
     }
+    // 分批获取最近有记录的日期
     final beforeDate =
         append && _loadedDateKeys.isNotEmpty ? _loadedDateKeys.last : null;
     final dates = await RecordDatabase.instance.fetchRecentRecordDates(
@@ -171,6 +185,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   void _handleScroll() {
+    // 根据滚动方向显示/隐藏底部按钮
     if (_recordScrollController.position.userScrollDirection ==
         ScrollDirection.reverse) {
       if (_showFab) {
@@ -193,12 +208,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (_keyword.trim().isNotEmpty) {
       return;
     }
+    // 接近底部时加载更多
     final position = _recordScrollController.position;
     if (position.pixels >= position.maxScrollExtent - 200) {
       _loadMore();
     }
   }
 
+  // 加载更多日期分组
   Future<void> _loadMore() async {
     if (_loadingMore || !_hasMore) {
       return;
@@ -222,9 +239,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     setState(() {
       _keyword = value;
     });
+    // 搜索变化后重新加载数据
     _loadRecords();
   }
 
+  // 清空搜索并恢复列表
   void _clearSearch() {
     _searchController.clear();
     setState(() {
@@ -234,6 +253,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _loadBills() async {
+    // 切换账本列表时刷新选择状态
     setState(() {
       _loadingBills = true;
     });
@@ -274,6 +294,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
   }
 
+  // 加载账户与余额信息
   Future<void> _loadAccounts() async {
     setState(() {
       _loadingAccounts = true;
@@ -310,6 +331,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
   }
 
+  // 打开记账表单
   Future<void> _openForm({TransactionRecord? record}) async {
     await showRecordFormSheet(
       context,
@@ -332,6 +354,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (!mounted) {
         return;
       }
+      // 删除后刷新记录与余额
       _loadRecords();
       _loadAccounts();
       _showMessage('已删除');
@@ -340,6 +363,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
   }
 
+  // 删除前二次确认
   Future<bool> _confirmDelete(TransactionRecord record) async {
     final result = await showDialog<bool>(
       context: context,
@@ -369,6 +393,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     );
   }
 
+  // 切换当前账本并刷新记录
   Future<void> _selectBill(Bill bill) async {
     if (_currentBillId == bill.id) {
       return;
@@ -383,6 +408,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _showBillSelectionDialog() async {
+    // 底部弹窗选择账本
     final selected = await showModalBottomSheet<Bill>(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -436,6 +462,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _createBill() async {
+    // 新增账本对话框
     final controller = TextEditingController();
     final result = await showDialog<String>(
       context: context,
@@ -485,6 +512,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _editBill(Bill bill) async {
+    // 修改账本名称
     final billId = bill.id;
     if (billId == null) {
       return;
@@ -534,6 +562,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _confirmDeleteBill(Bill bill) async {
+    // 删除账本时提示记录数量
     final billId = bill.id;
     if (billId == null || billId == RecordDatabase.instance.defaultBillId) {
       return;
@@ -645,6 +674,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _createAccount() async {
+    // 新增账户对话框
     final controller = TextEditingController();
     final result = await showDialog<String>(
       context: context,
@@ -690,6 +720,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _editAccount(Account account) async {
+    // 修改账户名称
     final accountId = account.id;
     if (accountId == null) {
       return;
@@ -739,6 +770,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _selectAccount(Account account) async {
+    // 切换当前账户，仅影响筛选与记账默认值
     if (account.id == null || account.id == _currentAccountId) {
       return;
     }
@@ -749,6 +781,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _confirmDeleteAccount(Account account) async {
+    // 删除账户并清理记录
     if (account.id == _defaultAccountId) {
       return;
     }
@@ -787,6 +820,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   String _currentBillName() {
+    // 当前账本显示名称
     final id = _currentBillId;
     for (final bill in _bills) {
       if (bill.id == id) {
@@ -797,6 +831,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _loadPreferences() async {
+    // 从本地偏好恢复选择状态
     try {
       final prefs = await SharedPreferences.getInstance();
       final billId = prefs.getInt(_prefKeyBillId);
@@ -813,6 +848,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _saveSelectedBill(int id) async {
+    // 持久化账本选择
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_prefKeyBillId, id);
@@ -822,6 +858,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _saveSelectedAccount(int id) async {
+    // 持久化账户选择
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_prefKeyAccountId, id);
@@ -840,6 +877,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
+    // 主界面结构
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -890,8 +928,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         ),
         actions: [
           IconButton(
-            onPressed: _loadRecords,
-            icon: const Icon(Icons.refresh),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const ExtensionMenuPage(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.apps),
           ),
         ],
       ),
@@ -999,6 +1043,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Widget _buildManagementTab() {
+    // 管理页：账本、账户、备份恢复、导入导出与格式化
     if (_loadingBills || _loadingAccounts) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -1351,6 +1396,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _showFormatDialog() async {
+    // 数据格式化确认弹窗
     final controller = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1416,6 +1462,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _executeFormat() async {
+    // 执行格式化：备份 + 清空 + 刷新
     // 显示加载对话框
     showDialog(
       context: context,
@@ -1452,6 +1499,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _backupData() async {
+    // 立即创建备份并提示导出
     try {
       final path = await RecordDatabase.instance.backup();
       if (!mounted) {
@@ -1489,6 +1537,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _showRestoreDialog() async {
+    // 从本地快照或外部文件恢复
     final backups = await RecordDatabase.instance.getBackups();
     if (!mounted) return;
 
@@ -1596,6 +1645,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _restoreFromExternalFile() async {
+    // 选择外部 .db 文件进行恢复
     try {
       final result = await FilePicker.platform.pickFiles();
       if (result != null && result.files.single.path != null) {
@@ -1612,6 +1662,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _confirmRestore(String path) async {
+    // 恢复前确认提示
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -1649,6 +1700,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   List<Widget> _buildGroupedRecords() {
+    // 按日期分组渲染记账记录
     final widgets = <Widget>[];
     var bucket = <TransactionRecord>[];
     String? currentDate;
@@ -1675,6 +1727,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Widget _buildDateGroup(String date, List<TransactionRecord> items) {
+    // 日期分组卡片
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 0,
@@ -1712,6 +1765,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     TransactionRecord record, {
     required bool showDivider,
   }) {
+    // 单条记录展示
     return InkWell(
         onTap: () => _openForm(record: record),
         onLongPress: () async {
@@ -1754,6 +1808,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   String _buildRecordTitle(TransactionRecord record) {
+    // 标题展示：分类 + 备注前缀
     final note = record.note?.trim();
     if (note == null || note.isEmpty) {
       return record.category;
@@ -1763,16 +1818,19 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   String _formatAmount(TransactionRecord record) {
+    // 金额显示加正负号
     final amount = record.amount.toStringAsFixed(2);
     final sign = record.type == 'income' ? '+' : '-';
     return '$sign$amount';
   }
 
   String _formatPlainAmount(double amount) {
+    // 余额显示格式化
     return amount.toStringAsFixed(2);
   }
 
   String _formatDate(DateTime date) {
+    // 日期格式化
     final year = date.year.toString().padLeft(4, '0');
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
@@ -1780,6 +1838,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _openImportDialog() async {
+    // 打开导入对话框
     final defaultBillId = RecordDatabase.instance.defaultBillId;
     final defaultAccountId =
         _defaultAccountId ?? RecordDatabase.instance.defaultAccountId;
@@ -1820,6 +1879,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<void> _openExportDialog() async {
+    // 打开导出筛选弹窗
     DateTime? start;
     DateTime? end;
     int? billId;
@@ -1876,6 +1936,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<String> _saveAsXlsx(List<Map<String, Object?>> rows) async {
+    // 将导出数据写入 xlsx 文件
     final headers = [
       '序号',
       '日期',
@@ -1928,6 +1989,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<Directory> _exportDirectory() async {
+    // 根据平台选择导出目录
     if (Platform.isAndroid) {
       final dir = await getTemporaryDirectory();
       debugPrint('Android 临时目录：${dir.path}');
@@ -1939,6 +2001,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<bool> _shareExportFile(String filePath) async {
+    // Android 分享导出文件
     if (!Platform.isAndroid) {
       debugPrint('非 Android 平台，跳过分享逻辑');
       return false;
@@ -1959,6 +2022,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   String _formatDateTime(DateTime date) {
+    // 生成文件名时间戳
     final year = date.year.toString().padLeft(4, '0');
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
@@ -1969,6 +2033,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   Future<int> _importFromXlsx(_ImportSelection selection) async {
+    // 从 xlsx 解析并导入记账记录
     debugPrint(
         '开始导入文件：${selection.fileName} billId=${selection.billId} accountId=${selection.accountId}');
     final workbook = excel.Excel.decodeBytes(selection.bytes);
@@ -2019,11 +2084,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   bool _isHeaderRow(List<excel.Data?> row) {
+    // 判断是否为表头行
     return _stringFromCell(_cellAt(row, 0)) == '序号' &&
         _stringFromCell(_cellAt(row, 1)) == '日期';
   }
 
   bool _rowIsEmpty(List<excel.Data?> row) {
+    // 判断行是否为空
     for (final cell in row) {
       if (_stringFromCell(cell).isNotEmpty) {
         return false;
@@ -2033,6 +2100,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   excel.Data? _cellAt(List<excel.Data?> row, int index) {
+    // 读取指定索引的单元格
     if (index < 0 || index >= row.length) {
       return null;
     }
@@ -2040,6 +2108,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   String _stringFromCell(excel.Data? cell) {
+    // 读取单元格字符串内容
     final value = cell?.value;
     if (value == null) {
       return '';
@@ -2048,6 +2117,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   double? _doubleFromCell(List<excel.Data?> row, int index) {
+    // 读取单元格数值内容
     final value = _cellAt(row, index)?.value;
     if (value is num) {
       return value.toDouble();
@@ -2059,6 +2129,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   DateTime? _dateFromCell(List<excel.Data?> row, int index) {
+    // 读取单元格日期内容
     final value = _cellAt(row, index)?.value;
     if (value is DateTime) {
       return value;
@@ -2070,6 +2141,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   String? _normalizeType(String input) {
+    // 统一收支类型格式
     if (input == '收入' || input.toLowerCase() == 'income') {
       return 'income';
     }

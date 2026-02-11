@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/record_database.dart';
 import '../data/transaction_record.dart';
 
+// 打开记账表单底部弹窗
 Future<bool?> showRecordFormSheet(
   BuildContext context, {
   required int billId,
@@ -23,6 +24,7 @@ Future<bool?> showRecordFormSheet(
   );
 }
 
+// 记账录入表单
 class RecordFormSheet extends StatefulWidget {
   const RecordFormSheet({
     super.key,
@@ -40,11 +42,13 @@ class RecordFormSheet extends StatefulWidget {
 }
 
 class _RecordFormSheetState extends State<RecordFormSheet> {
+  // 记账类型与金额输入状态
   late String _type;
   late String _amountText;
   late String _leftValue;
   String _rightValue = '';
   String? _operator;
+  // 基础信息与账户选择
   late DateTime _date;
   String? _category;
   List<Account> _accounts = [];
@@ -53,6 +57,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   late TextEditingController _noteController;
   bool _saving = false;
 
+  // 支出分类
   static const List<String> _expenseCategories = [
     '课程材料',
     '人员劳务',
@@ -62,6 +67,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     '其他',
   ];
 
+  // 收入分类
   static const List<String> _incomeCategories = [
     '备用金',
     '退款',
@@ -71,6 +77,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   @override
   void initState() {
     super.initState();
+    // 初始化表单默认值
     final record = widget.record;
     _type = record?.type ?? 'expense';
     _leftValue = record == null ? '0' : _formatAmountInput(record.amount);
@@ -94,6 +101,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   Future<void> _loadAccounts() async {
+    // 加载账户列表并修正默认账户
     setState(() {
       _loadingAccounts = true;
     });
@@ -130,6 +138,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   String _formatAmountInput(double amount) {
+    // 金额显示去除无意义的 0
     final rounded = amount.toStringAsFixed(2);
     if (rounded.endsWith('.00')) {
       return rounded.substring(0, rounded.length - 3);
@@ -141,6 +150,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   void _handleKey(String value) {
+    // 键盘输入统一入口
     setState(() {
       if (value == '⌫') {
         _handleBackspace();
@@ -166,6 +176,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   void _handleBackspace() {
+    // 处理退格键
     if (_operator == null) {
       _leftValue = _removeLastChar(_leftValue);
     } else if (_rightValue.isNotEmpty) {
@@ -179,6 +190,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   void _handleOperator(String operator) {
+    // 处理加减运算符
     if (_operator == null) {
       _operator = operator;
       return;
@@ -190,6 +202,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   void _handleDecimal() {
+    // 处理小数点
     if (_operator == null) {
       if (_leftValue.contains('.')) {
         return;
@@ -204,6 +217,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   void _handleDigit(String digit) {
+    // 处理数字输入
     if (_operator == null) {
       _leftValue = _appendDigit(_leftValue, digit);
     } else {
@@ -212,6 +226,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   String _appendDigit(String current, String digit) {
+    // 控制最大位数与小数位数
     final next = current == '0' ? digit : '$current$digit';
     if (next.contains('.')) {
       final parts = next.split('.');
@@ -226,6 +241,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   String _removeLastChar(String value) {
+    // 删除末尾字符并处理小数点
     if (value.isEmpty || value.length == 1) {
       return '';
     }
@@ -237,6 +253,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   String _buildDisplayText() {
+    // 构建金额显示文本
     if (_operator == null) {
       return _leftValue;
     }
@@ -247,6 +264,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   double _computeResult() {
+    // 计算表达式结果
     final left = double.tryParse(_leftValue) ?? 0;
     final right = _rightValue.isEmpty ? 0 : double.tryParse(_rightValue) ?? 0;
     if (_operator == '+') {
@@ -259,6 +277,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   double _currentAmount() {
+    // 获取当前应保存的金额
     if (_operator == null) {
       return double.tryParse(_leftValue) ?? 0;
     }
@@ -266,6 +285,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   Future<void> _pickDate() async {
+    // 选择日期
     final picked = await showDatePicker(
       context: context,
       initialDate: _date,
@@ -281,6 +301,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   Future<void> _save({required bool keepOpen}) async {
+    // 保存记账记录
     if (_saving) {
       return;
     }
@@ -344,10 +365,12 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   void _showMessage(String message) {
+    // 统一提示入口
     _showTopToast(message);
   }
 
   void _showTopToast(String message) {
+    // 顶部浮层提示
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) {
       return;
@@ -393,6 +416,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // 构建表单界面
     final categories =
         _type == 'expense' ? _expenseCategories : _incomeCategories;
     final bottom = MediaQuery.of(context).viewInsets.bottom;
@@ -514,6 +538,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   Widget _buildAccountSection() {
+    // 账户选择区域
     if (_loadingAccounts) {
       return Row(
         children: [
@@ -559,6 +584,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   String _formatDate(DateTime date) {
+    // 日期格式化
     final year = date.year.toString().padLeft(4, '0');
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
@@ -567,6 +593,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
 }
 
 class _NumberPad extends StatelessWidget {
+  // 数字键盘组件
   const _NumberPad({
     required this.onKeyPressed,
     required this.onSave,
@@ -581,6 +608,7 @@ class _NumberPad extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 构建四行数字键盘
     final disabled = saving;
     return Column(
       children: [
@@ -636,6 +664,7 @@ class _NumberPad extends StatelessWidget {
 }
 
 class _PadRow extends StatelessWidget {
+  // 数字键盘行布局
   const _PadRow({required this.children});
 
   final List<Widget> children;
@@ -657,6 +686,7 @@ class _PadRow extends StatelessWidget {
 }
 
 class _PadButton extends StatelessWidget {
+  // 数字键盘按钮
   const _PadButton({
     this.label,
     this.icon,
@@ -673,6 +703,7 @@ class _PadButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 构建按钮样式
     final color = backgroundColor ?? const Color(0xFFF1F1F1);
     final contentColor = textColor ?? const Color(0xFF1F1F1F);
     final child = icon != null

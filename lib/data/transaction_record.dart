@@ -1,3 +1,4 @@
+// 记账记录实体
 class TransactionRecord {
   TransactionRecord({
     this.id,
@@ -19,6 +20,7 @@ class TransactionRecord {
   final DateTime date;
   final String? note;
 
+  // 复制并替换指定字段
   TransactionRecord copyWith({
     int? id,
     int? billId,
@@ -41,6 +43,7 @@ class TransactionRecord {
     );
   }
 
+  // 转换为数据库存储 Map
   Map<String, Object?> toMap() {
     return {
       'id': id,
@@ -54,6 +57,7 @@ class TransactionRecord {
     };
   }
 
+  // 从数据库 Map 构建记录
   static TransactionRecord fromMap(Map<String, Object?> map) {
     return TransactionRecord(
       id: map['id'] as int?,
@@ -68,6 +72,7 @@ class TransactionRecord {
   }
 }
 
+// 账本实体
 class Bill {
   Bill({
     this.id,
@@ -79,6 +84,7 @@ class Bill {
   final String name;
   final bool isDefault;
 
+  // 转换为数据库存储 Map
   Map<String, Object?> toMap() {
     return {
       'id': id,
@@ -87,6 +93,7 @@ class Bill {
     };
   }
 
+  // 从数据库 Map 构建账本
   static Bill fromMap(Map<String, Object?> map) {
     return Bill(
       id: map['id'] as int?,
@@ -96,6 +103,7 @@ class Bill {
   }
 }
 
+// 账户实体
 class Account {
   Account({
     this.id,
@@ -107,6 +115,7 @@ class Account {
   final String name;
   final bool isDefault;
 
+  // 转换为数据库存储 Map
   Map<String, Object?> toMap() {
     return {
       'id': id,
@@ -115,6 +124,7 @@ class Account {
     };
   }
 
+  // 从数据库 Map 构建账户
   static Account fromMap(Map<String, Object?> map) {
     return Account(
       id: map['id'] as int?,

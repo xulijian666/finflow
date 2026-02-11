@@ -8,27 +8,35 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
 
 import 'transaction_record.dart';
 
+// 数据库访问单例，封装账本、账户、记账记录的读写与维护
 class RecordDatabase {
   RecordDatabase._internal();
 
+  // 全局唯一实例
   static final RecordDatabase instance = RecordDatabase._internal();
+  // 数据库文件名与内置资产路径
   static const String _dbName = 'finflow.db'; 
   static const String _assetDbPath = 'assets/finflow.db';
+  // 表名常量
   static const String _tableName = 'records';
   static const String _billTableName = 'bills';
   static const String _accountTableName = 'accounts';
+  // 默认账本与账户
   static const int _defaultBillId = 1;
   static const String _defaultBillName = '默认账本';
   static const int _defaultAccountId = 1;
   static const String _defaultAccountName = '默认账户';
 
+  // 当前数据库连接缓存
   sqflite.Database? _database;
 
+  // 获取应用目录下数据库文件路径
   Future<String> getDatabasePath() async {
     final directory = await getApplicationDocumentsDirectory();
     return p.join(directory.path, _dbName);
   }
 
+  // 关闭数据库连接并释放缓存
   Future<void> close() async {
     final db = _database;
     if (db != null) {
@@ -37,6 +45,7 @@ class RecordDatabase {
     }
   }
 
+  // 创建数据库备份并清理旧备份
   Future<String> backup() async {
     final dbPath = await getDatabasePath();
     final directory = await getApplicationDocumentsDirectory();
@@ -61,6 +70,7 @@ class RecordDatabase {
     return backupPath;
   }
 
+  // 仅保留最新的备份文件
   Future<void> _cleanOldBackups(Directory backupDir) async {
     try {
       final entities = await backupDir.list().toList();
@@ -82,6 +92,7 @@ class RecordDatabase {
     }
   }
 
+  // 获取本地备份列表
   Future<List<File>> getBackups() async {
     final directory = await getApplicationDocumentsDirectory();
     final backupDir = Directory(p.join(directory.path, 'backups'));
@@ -100,6 +111,7 @@ class RecordDatabase {
     return backups;
   }
 
+  // 从指定路径恢复数据库并重新初始化连接
   Future<void> restore(String sourcePath) async {
     await close();
     final dbPath = await getDatabasePath();
@@ -113,6 +125,7 @@ class RecordDatabase {
     await database;
   }
 
+  // 获取数据库连接，必要时初始化并补齐表结构
   Future<sqflite.Database> get database async {
     final existing = _database;
     if (existing != null) {
@@ -124,6 +137,7 @@ class RecordDatabase {
     return _database!;
   }
 
+  // 初始化数据库文件与平台适配
   Future<sqflite.Database> _initDatabase() async {
     final directory = await getApplicationDocumentsDirectory();
     await Directory(directory.path).create(recursive: true);
@@ -150,6 +164,7 @@ class RecordDatabase {
     );
   }
 
+  // 初始化创建表结构与默认数据
   Future<void> _createDb(sqflite.Database db, int version) async {
     await db.execute(
       '''
@@ -201,6 +216,7 @@ class RecordDatabase {
     );
   }
 
+  // 数据库版本升级与字段迁移
   Future<void> _upgradeDb(
     sqflite.Database db,
     int oldVersion,
@@ -278,6 +294,7 @@ class RecordDatabase {
     }
   }
 
+  // 启动时补齐缺失表与缺失字段
   Future<void> _ensureSchema(sqflite.Database db) async {
     final tables = await db.rawQuery(
       "SELECT name FROM sqlite_master WHERE type='table'",
@@ -365,6 +382,7 @@ class RecordDatabase {
     }
   }
 
+  // 确保默认账本与默认账户存在
   Future<void> ensureDefaultBillAndAccount() async {
     final db = await database;
     final defaultBillExists = await db.query(
@@ -401,11 +419,13 @@ class RecordDatabase {
     }
   }
 
+  // 新增记账记录
   Future<int> insertRecord(TransactionRecord record) async {
     final db = await database;
     return db.insert(_tableName, record.toMap());
   }
 
+  // 更新记账记录
   Future<int> updateRecord(TransactionRecord record) async {
     final db = await database;
     return db.update(
@@ -416,6 +436,7 @@ class RecordDatabase {
     );
   }
 
+  // 删除指定记录
   Future<int> deleteRecord(int id) async {
     final db = await database;
     return db.delete(
@@ -425,6 +446,7 @@ class RecordDatabase {
     );
   }
 
+  // 获取账本下的全部记录
   Future<List<TransactionRecord>> fetchRecords({required int billId}) async {
     final db = await database;
     final maps = await db.query(
@@ -436,6 +458,7 @@ class RecordDatabase {
     return maps.map(TransactionRecord.fromMap).toList();
   }
 
+  // 获取最近有记录的日期列表
   Future<List<String>> fetchRecentRecordDates({
     required int billId,
     String? beforeDate,
@@ -462,6 +485,7 @@ class RecordDatabase {
     return rows.map((row) => row['day'] as String).toList();
   }
 
+  // 按日期集合批量获取记录
   Future<List<TransactionRecord>> fetchRecordsByDates({
     required int billId,
     required List<String> dateKeys,
@@ -484,6 +508,7 @@ class RecordDatabase {
     return rows.map(TransactionRecord.fromMap).toList();
   }
 
+  // 按关键词检索记录
   Future<List<TransactionRecord>> fetchRecordsByKeyword({
     required int billId,
     required String keyword,
@@ -499,6 +524,7 @@ class RecordDatabase {
     return rows.map(TransactionRecord.fromMap).toList();
   }
 
+  // 构造导出所需的数据行
   Future<List<Map<String, Object?>>> fetchExportRows({
     DateTime? startDate,
     DateTime? endDate,
@@ -548,6 +574,7 @@ class RecordDatabase {
     return rows;
   }
 
+  // 批量插入记录
   Future<void> insertRecords(List<TransactionRecord> records) async {
     if (records.isEmpty) {
       return;
@@ -562,6 +589,7 @@ class RecordDatabase {
     });
   }
 
+  // 按主键获取单条记录
   Future<TransactionRecord?> fetchRecord(int id) async {
     final db = await database;
     final maps = await db.query(
@@ -576,6 +604,7 @@ class RecordDatabase {
     return TransactionRecord.fromMap(maps.first);
   }
 
+  // 获取账本列表
   Future<List<Bill>> fetchBills() async {
     final db = await database;
     final maps = await db.query(
@@ -585,6 +614,7 @@ class RecordDatabase {
     return maps.map(Bill.fromMap).toList();
   }
 
+  // 新增账本
   Future<int> insertBill(String name) async {
     final db = await database;
     return db.insert(_billTableName, {
@@ -593,6 +623,7 @@ class RecordDatabase {
     });
   }
 
+  // 修改账本名称
   Future<int> updateBillName(int id, String name) async {
     final db = await database;
     return db.update(
@@ -603,6 +634,7 @@ class RecordDatabase {
     );
   }
 
+  // 删除账本（默认账本不可删除）
   Future<int> deleteBill(int id) async {
     if (id == _defaultBillId) {
       return 0;
@@ -615,6 +647,7 @@ class RecordDatabase {
     );
   }
 
+  // 删除账本并清理对应记录
   Future<int> deleteBillWithRecords(int id) async {
     if (id == _defaultBillId) {
       return 0;
@@ -632,6 +665,7 @@ class RecordDatabase {
     );
   }
 
+  // 统计账本记录数量
   Future<int> countRecordsByBill(int billId) async {
     final db = await database;
     final rows = await db.rawQuery(
@@ -645,6 +679,7 @@ class RecordDatabase {
     return value is int ? value : (value as num?)?.toInt() ?? 0;
   }
 
+  // 将账本记录迁移到默认账本
   Future<int> migrateBillRecordsToDefault(int billId) async {
     if (billId == _defaultBillId) {
       return 0;
@@ -658,6 +693,7 @@ class RecordDatabase {
     );
   }
 
+  // 获取账户列表，并在为空时补齐默认账户
   Future<List<Account>> fetchAccounts() async {
     final db = await database;
     final maps = await db.query(
@@ -683,6 +719,7 @@ class RecordDatabase {
     return accounts;
   }
 
+  // 新增账户
   Future<int> insertAccount(String name) async {
     final db = await database;
     return db.insert(_accountTableName, {
@@ -691,6 +728,7 @@ class RecordDatabase {
     });
   }
 
+  // 修改账户名称
   Future<int> updateAccountName(int id, String name) async {
     final db = await database;
     return db.update(
@@ -701,6 +739,7 @@ class RecordDatabase {
     );
   }
 
+  // 删除账户并移除关联记录
   Future<int> deleteAccount(int id) async {
     if (id == _defaultAccountId) {
       return 0;
@@ -718,6 +757,7 @@ class RecordDatabase {
     );
   }
 
+  // 设置默认账户
   Future<void> setDefaultAccount(int id) async {
     final db = await database;
     await db.update(_accountTableName, {'is_default': 0});
@@ -729,6 +769,7 @@ class RecordDatabase {
     );
   }
 
+  // 统计账户余额（收入为正、支出为负）
   Future<Map<int, double>> fetchAccountBalances() async {
     final db = await database;
     final rows = await db.rawQuery(
@@ -751,11 +792,13 @@ class RecordDatabase {
     return map;
   }
 
+  // 清空所有记账记录
   Future<void> clearAllRecords() async {
     final db = await database;
     await db.delete(_tableName);
   }
 
+  // 默认账本与账户的固定主键
   int get defaultBillId => _defaultBillId;
   int get defaultAccountId => _defaultAccountId;
 }
