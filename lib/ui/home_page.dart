@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:excel/excel.dart' as excel;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -41,6 +42,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   int _currentTabIndex = 0;
   final ScrollController _recordScrollController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
+  bool _showFab = true;
 
   @override
   void initState() {
@@ -164,6 +166,22 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   void _handleScroll() {
+    if (_recordScrollController.position.userScrollDirection ==
+        ScrollDirection.reverse) {
+      if (_showFab) {
+        setState(() {
+          _showFab = false;
+        });
+      }
+    } else if (_recordScrollController.position.userScrollDirection ==
+        ScrollDirection.forward) {
+      if (!_showFab) {
+        setState(() {
+          _showFab = true;
+        });
+      }
+    }
+
     if (_loadingMore || _loading || !_hasMore) {
       return;
     }
@@ -171,7 +189,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       return;
     }
     final position = _recordScrollController.position;
-    if (position.pixels >= position.maxScrollExtent - 80) {
+    if (position.pixels >= position.maxScrollExtent - 200) {
       _loadMore();
     }
   }
@@ -347,6 +365,59 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       _currentBillId = bill.id;
     });
     _loadRecords();
+  }
+
+  Future<void> _showBillSelectionDialog() async {
+    final selected = await showModalBottomSheet<Bill>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                '切换账本',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _bills.length,
+                itemBuilder: (context, index) {
+                  final bill = _bills[index];
+                  final isSelected = bill.id == _currentBillId;
+                  return ListTile(
+                    leading: Icon(
+                      Icons.book,
+                      color: isSelected ? Theme.of(context).primaryColor : null,
+                    ),
+                    title: Text(
+                      bill.name,
+                      style: TextStyle(
+                        color: isSelected ? Theme.of(context).primaryColor : null,
+                        fontWeight: isSelected ? FontWeight.bold : null,
+                      ),
+                    ),
+                    trailing: isSelected ? const Icon(Icons.check) : null,
+                    onTap: () => Navigator.of(context).pop(bill),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        );
+      },
+    );
+    if (selected != null) {
+      _selectBill(selected);
+    }
   }
 
   Future<void> _createBill() async {
@@ -719,7 +790,45 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('记账'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('记账'),
+            const SizedBox(width: 12),
+            InkWell(
+              onTap: _showBillSelectionDialog,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        _currentBillName(),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onSecondaryContainer,
+                            ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
@@ -737,15 +846,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       body: TabBarView(
         controller: _tabController,
         children: [
-          RefreshIndicator(
-            onRefresh: _loadRecords,
-            child: ListView(
-              controller: _recordScrollController,
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
-              children: [
-                _BillBanner(name: _currentBillName()),
-                const SizedBox(height: 12),
-                TextField(
+          Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: TextField(
                   controller: _searchController,
                   onChanged: _onSearchChanged,
                   decoration: InputDecoration(
@@ -765,37 +870,77 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
-                if (_loading)
-                  const Center(child: CircularProgressIndicator())
-                else if (_loadingError)
-                  _EmptyState(
-                    message: '加载失败，请下拉重试',
-                    onRetry: _loadRecords,
-                  )
-                else if (_records.isEmpty)
-                  _EmptyState(
-                    message: '暂无记录，点 + 记一笔',
-                    onRetry: _loadRecords,
-                  )
-                else
-                  ..._buildGroupedRecords(),
-                if (_loadingMore)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 12),
-                    child: Center(child: CircularProgressIndicator()),
+              ),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _loadRecords,
+                  child: ListView(
+                    controller: _recordScrollController,
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
+                    children: [
+                      if (_loading)
+                        const Center(child: CircularProgressIndicator())
+                      else if (_loadingError)
+                        _EmptyState(
+                          message: '加载失败，请下拉重试',
+                          onRetry: _loadRecords,
+                        )
+                      else if (_records.isEmpty)
+                        _EmptyState(
+                          message: '暂无记录，点 + 记一笔',
+                          onRetry: _loadRecords,
+                        )
+                      else
+                        ..._buildGroupedRecords(),
+                      if (_loadingMore)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 12),
+                          child: Center(child: CircularProgressIndicator()),
+                        ),
+                    ],
                   ),
-              ],
-            ),
+                ),
+              ),
+            ],
           ),
           _buildManagementTab(),
         ],
       ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: _currentTabIndex == 0
-          ? FloatingActionButton.extended(
-              onPressed: () => _openForm(),
-              label: const Text('记一笔'),
-              icon: const Icon(Icons.add),
+          ? AnimatedOpacity(
+              duration: const Duration(milliseconds: 300),
+              opacity: _showFab ? 1.0 : 0.0,
+              child: IgnorePointer(
+                ignoring: !_showFab,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      FloatingActionButton(
+                        heroTag: 'scrollToTop',
+                        onPressed: () {
+                          _recordScrollController.animateTo(
+                            0,
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeOut,
+                          );
+                        },
+                        backgroundColor: Theme.of(context).colorScheme.surface,
+                        foregroundColor: Theme.of(context).colorScheme.primary,
+                        child: const Icon(Icons.arrow_upward),
+                      ),
+                      const Spacer(),
+                      FloatingActionButton.extended(
+                        heroTag: 'addRecord',
+                        onPressed: () => _openForm(),
+                        label: const Text('记一笔'),
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             )
           : null,
     );
@@ -1056,7 +1201,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           children: [
             Expanded(
               child: Text(
-                '数据导出',
+                '账单数据导出',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
@@ -1149,18 +1294,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     TransactionRecord record, {
     required bool showDivider,
   }) {
-    return Dismissible(
-      key: ValueKey(record.id),
-      background: Container(
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
-        color: const Color(0xFFFFE3E3),
-        child: const Icon(Icons.delete_outline),
-      ),
-      direction: DismissDirection.endToStart,
-      confirmDismiss: (_) => _confirmDelete(record),
-      onDismissed: (_) => _deleteRecord(record),
-      child: InkWell(
+    return InkWell(
         onTap: () => _openForm(record: record),
         onLongPress: () async {
           final confirmed = await _confirmDelete(record);
@@ -1198,8 +1332,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             ],
           ),
         ),
-      ),
-    );
+      );
   }
 
   String _buildRecordTitle(TransactionRecord record) {
@@ -1871,36 +2004,6 @@ class _ImportDialogState extends State<_ImportDialog> {
       _fileName = file.name;
       _bytes = bytes;
     });
-  }
-}
-class _BillBanner extends StatelessWidget {
-  const _BillBanner({required this.name});
-
-  final String name;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            const Icon(Icons.folder_open),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '当前账本：$name',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
