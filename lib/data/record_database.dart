@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -21,6 +22,8 @@ class RecordDatabase {
   static const String _tableName = 'records';
   static const String _billTableName = 'bills';
   static const String _accountTableName = 'accounts';
+  static const String _baseMaterialTableName = 'base_materials';
+  static const String _inventoryTableName = 'inventory_records';
   // 默认账本与账户
   static const int _defaultBillId = 1;
   static const String _defaultBillName = '默认账本';
@@ -88,7 +91,7 @@ class RecordDatabase {
         }
       }
     } catch (e) {
-      print('清理旧备份失败: $e');
+      debugPrint('清理旧备份失败: $e');
     }
   }
 
@@ -151,14 +154,14 @@ class RecordDatabase {
       );
       await file.writeAsBytes(bytes, flush: true);
     }
-    print('SQLite 数据库路径：$path');
+    debugPrint('SQLite 数据库路径：$path');
     if (Platform.isWindows) {
       ffi.sqfliteFfiInit();
       sqflite.databaseFactory = ffi.databaseFactoryFfi;
     }
     return sqflite.openDatabase(
       path,
-      version: 3,
+      version: 5,
       onCreate: _createDb,
       onUpgrade: _upgradeDb,
     );
@@ -211,6 +214,27 @@ class RecordDatabase {
         category TEXT NOT NULL,
         date TEXT NOT NULL,
         note TEXT
+      )
+      ''',
+    );
+    await db.execute(
+      '''
+      CREATE TABLE $_baseMaterialTableName (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        unit TEXT NOT NULL
+      )
+      ''',
+    );
+    await db.execute(
+      '''
+      CREATE TABLE $_inventoryTableName (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        material_name TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        unit TEXT,
+        record_id INTEGER,
+        created_at TEXT NOT NULL
       )
       ''',
     );
@@ -290,6 +314,31 @@ class RecordDatabase {
         _tableName,
         {'account_id': _defaultAccountId},
         where: 'account_id IS NULL',
+      );
+    }
+    if (oldVersion < 4) {
+      await db.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS $_baseMaterialTableName (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          unit TEXT NOT NULL
+        )
+        ''',
+      );
+    }
+    if (oldVersion < 5) {
+      await db.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS $_inventoryTableName (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          material_name TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          unit TEXT,
+          record_id INTEGER,
+          created_at TEXT NOT NULL
+        )
+        ''',
       );
     }
   }
@@ -380,6 +429,31 @@ class RecordDatabase {
         where: 'account_id IS NULL',
       );
     }
+    if (!tableNames.contains(_baseMaterialTableName)) {
+      await db.execute(
+        '''
+        CREATE TABLE $_baseMaterialTableName (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          unit TEXT NOT NULL
+        )
+        ''',
+      );
+    }
+    if (!tableNames.contains(_inventoryTableName)) {
+      await db.execute(
+        '''
+        CREATE TABLE $_inventoryTableName (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          material_name TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          unit TEXT,
+          record_id INTEGER,
+          created_at TEXT NOT NULL
+        )
+        ''',
+      );
+    }
   }
 
   // 确保默认账本与默认账户存在
@@ -439,6 +513,11 @@ class RecordDatabase {
   // 删除指定记录
   Future<int> deleteRecord(int id) async {
     final db = await database;
+    await db.delete(
+      _inventoryTableName,
+      where: 'record_id = ?',
+      whereArgs: [id],
+    );
     return db.delete(
       _tableName,
       where: 'id = ?',
@@ -798,7 +877,237 @@ class RecordDatabase {
     await db.delete(_tableName);
   }
 
+  // --- 基础材料管理 ---
+
+  Future<int> insertBaseMaterial(BaseMaterial material) async {
+    final db = await database;
+    return db.insert(_baseMaterialTableName, material.toMap());
+  }
+
+  // 批量更新或插入基础材料
+  Future<Map<String, int>> upsertBaseMaterials(List<BaseMaterial> materials) async {
+    final db = await database;
+    var inserted = 0;
+    var updated = 0;
+    
+    await db.transaction((txn) async {
+      for (final material in materials) {
+        final existing = await txn.query(
+          _baseMaterialTableName,
+          where: 'name = ?',
+          whereArgs: [material.name],
+        );
+        
+        if (existing.isNotEmpty) {
+           await txn.update(
+             _baseMaterialTableName,
+             {'unit': material.unit},
+             where: 'name = ?',
+             whereArgs: [material.name],
+           );
+           updated++;
+        } else {
+           await txn.insert(_baseMaterialTableName, {
+             'name': material.name,
+             'unit': material.unit,
+           });
+           inserted++;
+        }
+      }
+    });
+    return {'inserted': inserted, 'updated': updated};
+  }
+
+  // 替换所有基础材料
+  Future<int> replaceBaseMaterials(List<BaseMaterial> materials) async {
+    final db = await database;
+    return await db.transaction((txn) async {
+      await txn.delete(_baseMaterialTableName);
+      final batch = txn.batch();
+      for (final material in materials) {
+        batch.insert(_baseMaterialTableName, material.toMap());
+      }
+      await batch.commit(noResult: true);
+      return materials.length;
+    });
+  }
+
+  Future<int> updateBaseMaterial(BaseMaterial material) async {
+    final db = await database;
+    return db.update(
+      _baseMaterialTableName,
+      material.toMap(),
+      where: 'id = ?',
+      whereArgs: [material.id],
+    );
+  }
+
+  Future<int> deleteBaseMaterial(int id) async {
+    final db = await database;
+    return db.delete(
+      _baseMaterialTableName,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<List<BaseMaterial>> fetchBaseMaterials({
+    String? keyword,
+    int? limit,
+    int? offset,
+  }) async {
+    final db = await database;
+    final query = keyword?.trim() ?? '';
+    final hasKeyword = query.isNotEmpty;
+    final maps = await db.query(
+      _baseMaterialTableName,
+      where: hasKeyword ? 'name LIKE ?' : null,
+      whereArgs: hasKeyword ? ['%$query%'] : null,
+      orderBy: 'name COLLATE NOCASE ASC, id DESC',
+      limit: limit,
+      offset: offset,
+    );
+    return maps.map(BaseMaterial.fromMap).toList();
+  }
+
+  Future<BaseMaterial?> fetchBaseMaterialByName(String name) async {
+    final db = await database;
+    final maps = await db.query(
+      _baseMaterialTableName,
+      where: 'name = ?',
+      whereArgs: [name],
+      limit: 1,
+    );
+    if (maps.isEmpty) {
+      return null;
+    }
+    return BaseMaterial.fromMap(maps.first);
+  }
+
+  // --- 库存管理 ---
+
+  // 新增库存记录
+  Future<int> insertInventoryRecord({
+    required String materialName,
+    required double quantity,
+    String? unit,
+    int? recordId,
+  }) async {
+    final db = await database;
+    return db.insert(_inventoryTableName, {
+      'material_name': materialName,
+      'quantity': quantity,
+      'unit': unit,
+      'record_id': recordId,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  // 删除关联的库存记录
+  Future<int> deleteInventoryByRecordId(int recordId) async {
+    final db = await database;
+    return db.delete(
+      _inventoryTableName,
+      where: 'record_id = ?',
+      whereArgs: [recordId],
+    );
+  }
+
+  // 查询库存汇总
+  Future<List<InventorySummary>> fetchInventorySummary({String? keyword}) async {
+    final db = await database;
+    final query = keyword?.trim() ?? '';
+    final whereClause = query.isNotEmpty ? 'WHERE i.material_name LIKE ?' : '';
+    final args = query.isNotEmpty ? ['%$query%'] : [];
+    
+    final rows = await db.rawQuery(
+      '''
+      SELECT 
+        i.material_name, 
+        SUM(i.quantity) as total_quantity, 
+        MAX(i.unit) as unit,
+        SUM(r.amount) as total_amount
+      FROM $_inventoryTableName i
+      LEFT JOIN $_tableName r ON i.record_id = r.id
+      $whereClause
+      GROUP BY i.material_name
+      ORDER BY total_quantity DESC
+      ''',
+      args,
+    );
+    
+    return rows.map((row) => InventorySummary(
+      materialName: row['material_name'] as String,
+      totalQuantity: (row['total_quantity'] as num).toDouble(),
+      unit: row['unit'] as String?,
+      totalAmount: (row['total_amount'] as num?)?.toDouble() ?? 0.0,
+    )).toList();
+  }
+
+  // 查询单个材料的库存明细
+  Future<List<InventoryRecord>> fetchInventoryDetails(String materialName) async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT i.*, r.amount as record_amount
+      FROM $_inventoryTableName i
+      LEFT JOIN $_tableName r ON i.record_id = r.id
+      WHERE i.material_name = ?
+      ORDER BY i.created_at DESC
+      ''',
+      [materialName],
+    );
+    
+    return rows.map((row) => InventoryRecord.fromMap(row)).toList();
+  }
+
   // 默认账本与账户的固定主键
   int get defaultBillId => _defaultBillId;
   int get defaultAccountId => _defaultAccountId;
+}
+
+class InventorySummary {
+  final String materialName;
+  final double totalQuantity;
+  final String? unit;
+  final double totalAmount;
+
+  InventorySummary({
+    required this.materialName,
+    required this.totalQuantity,
+    this.unit,
+    this.totalAmount = 0.0,
+  });
+}
+
+class InventoryRecord {
+  final int id;
+  final String materialName;
+  final double quantity;
+  final String? unit;
+  final int? recordId;
+  final String createdAt;
+  final double? amount;
+
+  InventoryRecord({
+    required this.id,
+    required this.materialName,
+    required this.quantity,
+    this.unit,
+    this.recordId,
+    required this.createdAt,
+    this.amount,
+  });
+
+  static InventoryRecord fromMap(Map<String, dynamic> map) {
+    return InventoryRecord(
+      id: map['id'] as int,
+      materialName: map['material_name'] as String,
+      quantity: (map['quantity'] as num).toDouble(),
+      unit: map['unit'] as String?,
+      recordId: map['record_id'] as int?,
+      createdAt: map['created_at'] as String,
+      amount: (map['record_amount'] as num?)?.toDouble(),
+    );
+  }
 }

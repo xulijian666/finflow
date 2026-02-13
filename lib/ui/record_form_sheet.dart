@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/record_database.dart';
 import '../data/transaction_record.dart';
@@ -43,6 +47,8 @@ class RecordFormSheet extends StatefulWidget {
 
 class _RecordFormSheetState extends State<RecordFormSheet> {
   // 记账类型与金额输入状态
+  static const String _prefKeyLongcatApiKey = 'longcat_api_key';
+  static const String _defaultLongcatApiKey = 'ak_1DQ2Mp2d77AD7nr5H840Y4xT2VD5D';
   late String _type;
   late String _amountText;
   late String _leftValue;
@@ -55,7 +61,11 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   bool _loadingAccounts = true;
   int? _accountId;
   late TextEditingController _noteController;
+  late TextEditingController _materialNameController;
+  late TextEditingController _materialQuantityController;
+  bool _smartAccounting = true;
   bool _saving = false;
+  static const String _materialNoteSplitter = '｜';
 
   // 支出分类
   static const List<String> _expenseCategories = [
@@ -90,13 +100,23 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
             ? _expenseCategories.first
             : _incomeCategories.first);
     _accountId = record?.accountId ?? widget.defaultAccountId;
-    _noteController = TextEditingController(text: record?.note ?? '');
+    final noteText = record?.note ?? '';
+    _noteController = TextEditingController(text: noteText);
+    final materialNote = _splitMaterialNote(noteText);
+    _materialNameController = TextEditingController(
+      text: materialNote['name'] ?? '',
+    );
+    _materialQuantityController = TextEditingController(
+      text: materialNote['quantity'] ?? '',
+    );
     _loadAccounts();
   }
 
   @override
   void dispose() {
     _noteController.dispose();
+    _materialNameController.dispose();
+    _materialQuantityController.dispose();
     super.dispose();
   }
 
@@ -148,6 +168,31 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     }
     return rounded;
   }
+
+  Map<String, String> _splitMaterialNote(String note) {
+    final trimmed = note.trim();
+    if (trimmed.isEmpty) {
+      return {'name': '', 'quantity': ''};
+    }
+    final index = trimmed.indexOf(_materialNoteSplitter);
+    if (index == -1) {
+      return {'name': trimmed, 'quantity': ''};
+    }
+    final name = trimmed.substring(0, index).trim();
+    final quantity = trimmed.substring(index + _materialNoteSplitter.length).trim();
+    return {'name': name, 'quantity': quantity};
+  }
+
+  String _buildMaterialNote(String name, String quantity) {
+    final trimmedName = name.trim();
+    final trimmedQuantity = quantity.trim();
+    if (trimmedQuantity.isEmpty) {
+      return trimmedName;
+    }
+    return '$trimmedName$_materialNoteSplitter$trimmedQuantity';
+  }
+
+  bool get _isMaterialCategory => _category == '课程材料';
 
   void _handleKey(String value) {
     // 键盘输入统一入口
@@ -300,6 +345,323 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     });
   }
 
+  Future<String?> _resolveMaterialName(String inputName) async {
+    final materials = await RecordDatabase.instance.fetchBaseMaterials();
+    final names = materials.map((item) => item.name).toList();
+    if (_smartAccounting) {
+      final candidates = await _fetchSmartCandidates(inputName, names);
+      if (candidates.isEmpty) {
+        _showMessage('未找到相似材料，请确认是否新增');
+        final created = await _confirmCreateMaterial(inputName);
+        return created ? inputName : null;
+      }
+      final result = await _showMaterialOptions(
+        '智能记账推荐',
+        candidates,
+        inputName: inputName,
+      );
+      if (result == inputName) {
+        final created = await _confirmCreateMaterial(inputName);
+        return created ? inputName : null;
+      }
+      return result;
+    }
+    final candidates = _localMatchCandidates(inputName, names).take(3).toList();
+    if (candidates.isEmpty) {
+      _showMessage('未找到相似材料，请确认是否新增');
+      final created = await _confirmCreateMaterial(inputName);
+      return created ? inputName : null;
+    }
+    final result = await _showMaterialOptions(
+      '相似材料选择',
+      candidates,
+      inputName: inputName,
+    );
+    if (result == inputName) {
+      final created = await _confirmCreateMaterial(inputName);
+      return created ? inputName : null;
+    }
+    return result;
+  }
+
+  Future<List<String>> _fetchSmartCandidates(
+    String inputName,
+    List<String> baseNames,
+  ) async {
+    final apiKeyFromDefine = const String.fromEnvironment('LONGCAT_API_KEY');
+    final storedKey = await _loadLongcatApiKey();
+    final apiKey = apiKeyFromDefine.isNotEmpty
+        ? apiKeyFromDefine
+        : (Platform.environment['LONGCAT_API_KEY'] ??
+            (storedKey.isNotEmpty ? storedKey : _defaultLongcatApiKey));
+    if (apiKey.trim().isEmpty) {
+      _showMessage('未配置智能记账密钥，已使用本地匹配');
+      return _localMatchCandidates(inputName, baseNames).take(3).toList();
+    }
+    final prompt = '''
+你是材料匹配助手，请从材料列表中找出与用户备注最相近的材料名称。
+要求：
+1. 仅返回 JSON 数组，数组元素为材料名称字符串。
+2. 只能从材料列表中选择，不可编造。
+3. 返回数量最多 5 个。
+材料列表：${baseNames.join('、')}
+用户备注：$inputName
+''';
+    final payload = {
+      'model': 'LongCat-Flash-Chat',
+      'messages': [
+        {'role': 'user', 'content': prompt},
+      ],
+      'temperature': 0.2,
+      'stream': false,
+    };
+
+    // 打印发送给大模型的请求 payload
+    debugPrint('--- AI Request Payload ---');
+    debugPrint(jsonEncode(payload));
+
+    final client = HttpClient();
+    try {
+      final uri =
+          Uri.parse('https://api.longcat.chat/openai/v1/chat/completions');
+      final request = await client.postUrl(uri);
+      request.headers.contentType = ContentType.json;
+      request.headers.set('Authorization', 'Bearer $apiKey');
+      request.add(utf8.encode(jsonEncode(payload)));
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+
+      // 打印大模型的原始返回结果
+      debugPrint('--- AI Response Body ---');
+      debugPrint(body);
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return _localMatchCandidates(inputName, baseNames).take(3).toList();
+      }
+      final data = jsonDecode(body);
+      String? content;
+      if (data is Map<String, dynamic>) {
+        final choices = data['choices'];
+        if (choices is List && choices.isNotEmpty) {
+          final first = choices.first;
+          if (first is Map<String, dynamic>) {
+            final message = first['message'];
+            if (message is Map<String, dynamic>) {
+              final value = message['content'];
+              if (value is String) {
+                content = value;
+              }
+            }
+          }
+        }
+      }
+      if (content == null) {
+        return _localMatchCandidates(inputName, baseNames).take(3).toList();
+      }
+      final extracted = _extractJsonArray(content);
+      if (extracted == null) {
+        return _localMatchCandidates(inputName, baseNames).take(3).toList();
+      }
+      final rawList = jsonDecode(extracted);
+      if (rawList is! List) {
+        return _localMatchCandidates(inputName, baseNames).take(3).toList();
+      }
+      final baseLower = baseNames.map((e) => e.toLowerCase()).toSet();
+      final options = <String>[];
+      for (final item in rawList) {
+        if (item is! String) {
+          continue;
+        }
+        final trimmed = item.trim();
+        if (trimmed.isEmpty) {
+          continue;
+        }
+        if (!baseLower.contains(trimmed.toLowerCase())) {
+          continue;
+        }
+        if (!options.contains(trimmed)) {
+          options.add(trimmed);
+        }
+        if (options.length >= 5) {
+          break;
+        }
+      }
+      return options;
+    } catch (_) {
+      return _localMatchCandidates(inputName, baseNames).take(3).toList();
+    } finally {
+      client.close();
+    }
+  }
+
+  String? _extractJsonArray(String content) {
+    final trimmed = content.trim();
+    final start = trimmed.indexOf('[');
+    final end = trimmed.lastIndexOf(']');
+    if (start == -1 || end == -1 || end <= start) {
+      return null;
+    }
+    return trimmed.substring(start, end + 1);
+  }
+
+  Future<String> _loadLongcatApiKey() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_prefKeyLongcatApiKey)?.trim() ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  List<String> _localMatchCandidates(String inputName, List<String> baseNames) {
+    final keyword = inputName.trim().toLowerCase();
+    if (keyword.isEmpty) {
+      return [];
+    }
+    final scored = <Map<String, Object>>[];
+    for (final name in baseNames) {
+      final lower = name.toLowerCase();
+      var score = 0;
+      if (lower == keyword) {
+        score += 1000;
+      }
+      if (lower.contains(keyword)) {
+        score += 500;
+      }
+      if (keyword.contains(lower)) {
+        score += 300;
+      }
+      var common = 0;
+      for (final char in keyword.split('')) {
+        if (lower.contains(char)) {
+          common += 1;
+        }
+      }
+      score += common;
+      if (score > 0) {
+        scored.add({'name': name, 'score': score});
+      }
+    }
+    scored.sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
+    return scored.map((item) => item['name'] as String).toList();
+  }
+
+  Future<String?> _showMaterialOptions(
+    String title,
+    List<String> options, {
+    String? inputName,
+  }) {
+    if (options.isEmpty) {
+      return Future.value(null);
+    }
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        String? selected = options.first;
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: Text(title),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: options.map((item) {
+                    return RadioListTile<String>(
+                      title: Text(item),
+                      value: item,
+                      groupValue: selected,
+                      onChanged: (value) {
+                        setState(() {
+                          selected = value;
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+              actions: [
+                if (inputName != null)
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(inputName),
+                    child: const Text('直接新增'),
+                  ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(null),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(selected),
+                  child: const Text('确定'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<bool> _confirmCreateMaterial(String name) async {
+    final unitController = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('新增基础材料'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text('材料名称：$name'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: unitController,
+                decoration: const InputDecoration(
+                  hintText: '请输入单位',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final unit = unitController.text.trim();
+                if (unit.isEmpty) {
+                  _showMessage('请输入单位');
+                  return;
+                }
+                Navigator.of(context).pop(unit);
+              },
+              child: const Text('新增'),
+            ),
+          ],
+        );
+      },
+    );
+    final unit = result?.trim();
+    if (unit == null || unit.isEmpty) {
+      return false;
+    }
+    try {
+      await RecordDatabase.instance.insertBaseMaterial(
+        BaseMaterial(name: name, unit: unit),
+      );
+      _showMessage('已新增基础材料');
+      return true;
+    } catch (_) {
+      _showMessage('新增失败，请重试');
+      return false;
+    }
+  }
+
   Future<void> _save({required bool keepOpen}) async {
     // 保存记账记录
     if (_saving) {
@@ -322,6 +684,64 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
       _saving = true;
     });
     try {
+      String? note;
+      String? invMaterialName;
+      double? invQuantity;
+      String? invUnit;
+
+      if (_isMaterialCategory) {
+        final materialName = _materialNameController.text.trim();
+        final quantity = _materialQuantityController.text.trim();
+        if (materialName.isEmpty) {
+          _showMessage('请输入材料名称');
+          setState(() {
+            _saving = false;
+          });
+          return;
+        }
+        if (quantity.isEmpty) {
+          _showMessage('请输入数量');
+          setState(() {
+            _saving = false;
+          });
+          return;
+        }
+        final qtyValue = double.tryParse(quantity);
+        if (qtyValue == null || qtyValue <= 0) {
+          _showMessage('数量必须大于0');
+          setState(() {
+            _saving = false;
+          });
+          return;
+        }
+        final matched = await RecordDatabase.instance
+            .fetchBaseMaterialByName(materialName);
+        var finalName = materialName;
+        if (matched == null) {
+          final resolved = await _resolveMaterialName(materialName);
+          if (resolved == null || resolved.trim().isEmpty) {
+            setState(() {
+              _saving = false;
+            });
+            return;
+          }
+          finalName = resolved.trim();
+          _materialNameController.text = finalName;
+        }
+        
+        // 获取单位
+        final baseMat = await RecordDatabase.instance.fetchBaseMaterialByName(finalName);
+        if (baseMat != null) {
+          invUnit = baseMat.unit;
+        }
+        
+        invMaterialName = finalName;
+        invQuantity = qtyValue;
+        note = _buildMaterialNote(finalName, quantity);
+      } else {
+        final rawNote = _noteController.text.trim();
+        note = rawNote.isEmpty ? null : rawNote;
+      }
       final record = TransactionRecord(
         id: widget.record?.id,
         billId: widget.record?.billId ?? widget.billId,
@@ -330,15 +750,29 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
         amount: amount,
         category: _category!,
         date: _date,
-        note: _noteController.text.trim().isEmpty
-            ? null
-            : _noteController.text.trim(),
+        note: note,
       );
+      
+      int recordId;
       if (widget.record == null) {
-        await RecordDatabase.instance.insertRecord(record);
+        recordId = await RecordDatabase.instance.insertRecord(record);
       } else {
         await RecordDatabase.instance.updateRecord(record);
+        recordId = widget.record!.id!;
+        // 更新时先清理旧的库存记录
+        await RecordDatabase.instance.deleteInventoryByRecordId(recordId);
       }
+      
+      // 写入库存记录
+      if (invMaterialName != null && invQuantity != null) {
+        await RecordDatabase.instance.insertInventoryRecord(
+          materialName: invMaterialName,
+          quantity: invQuantity,
+          unit: invUnit,
+          recordId: recordId,
+        );
+      }
+
       if (!mounted) {
         return;
       }
@@ -350,6 +784,8 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
           _operator = null;
           _amountText = _leftValue;
           _noteController.clear();
+          _materialNameController.clear();
+          _materialQuantityController.clear();
           _saving = false;
         });
       } else {
@@ -452,10 +888,21 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                         selected: {_type},
                         onSelectionChanged: (value) {
                           setState(() {
+                            final previousCategory = _category;
                             _type = value.first;
                             _category = _type == 'expense'
                                 ? _expenseCategories.first
                                 : _incomeCategories.first;
+                            if (_category == '课程材料' &&
+                                _materialNameController.text.trim().isEmpty) {
+                              _materialNameController.text =
+                                  _noteController.text.trim();
+                            } else if (previousCategory == '课程材料' &&
+                                _category != '课程材料' &&
+                                _noteController.text.trim().isEmpty) {
+                              _noteController.text =
+                                  _materialNameController.text.trim();
+                            }
                           });
                         },
                       ),
@@ -485,7 +932,18 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                       selected: selected,
                       onSelected: (_) {
                         setState(() {
+                          final previousCategory = _category;
                           _category = item;
+                          if (_category == '课程材料' &&
+                              _materialNameController.text.trim().isEmpty) {
+                            _materialNameController.text =
+                                _noteController.text.trim();
+                          } else if (previousCategory == '课程材料' &&
+                              _category != '课程材料' &&
+                              _noteController.text.trim().isEmpty) {
+                            _noteController.text =
+                                _materialNameController.text.trim();
+                          }
                         });
                       },
                     );
@@ -505,14 +963,59 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                     ),
                   ],
                 ),
-                TextField(
-                  controller: _noteController,
-                  decoration: const InputDecoration(
-                    hintText: '',
-                    border: OutlineInputBorder(),
-                    counterText: '',
+                if (_isMaterialCategory) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _materialNameController,
+                          decoration: const InputDecoration(
+                            hintText: '备注',
+                            border: OutlineInputBorder(),
+                            counterText: '',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _materialQuantityController,
+                          decoration: const InputDecoration(
+                            hintText: '数量',
+                            border: OutlineInputBorder(),
+                            counterText: '',
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: _smartAccounting,
+                        onChanged: (value) {
+                          setState(() {
+                            _smartAccounting = value ?? true;
+                          });
+                        },
+                      ),
+                      const Text('智能记账'),
+                    ],
+                  ),
+                ] else ...[
+                  TextField(
+                    controller: _noteController,
+                    decoration: const InputDecoration(
+                      hintText: '',
+                      border: OutlineInputBorder(),
+                      counterText: '',
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Text(
                   _amountText,

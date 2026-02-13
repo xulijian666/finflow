@@ -1,6 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
-
 import 'package:excel/excel.dart' as excel;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -28,6 +26,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   // 持久化键值
   static const String _prefKeyBillId = 'selected_bill_id';
   static const String _prefKeyAccountId = 'selected_account_id';
+  static const String _prefKeyLongcatApiKey = 'longcat_api_key';
+  static const String _defaultLongcatApiKey = 'ak_1DQ2Mp2d77AD7nr5H840Y4xT2VD5D';
 
   // 列表数据与账户余额
   List<TransactionRecord> _records = [];
@@ -44,22 +44,29 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   // 搜索与分页缓存
   String _keyword = '';
   final List<String> _loadedDateKeys = [];
+  Map<String, String> _baseMaterials = {}; // 基础材料缓存 (name -> unit)
+  static const String _materialNoteSplitter = '｜';
+
   // 当前选择状态
   int? _currentBillId;
   int? _defaultAccountId;
   int? _currentAccountId;
   int? _editingBillId;
   int? _editingAccountId;
+  String _longcatApiKey = _defaultLongcatApiKey;
   // UI 控制器
   late TabController _tabController;
   int _currentTabIndex = 0;
   final ScrollController _recordScrollController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
   bool _showFab = true;
+  OverlayEntry? _exitToastEntry;
+  DateTime? _lastPressedAt;
 
   @override
   void initState() {
     super.initState();
+    final _ = _openImportDialog;
     // 初始化双 Tab 控制器
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
@@ -87,6 +94,20 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
     _loadBills();
     _loadAccounts();
+    _loadBaseMaterials();
+  }
+
+  // 加载基础材料列表
+  Future<void> _loadBaseMaterials() async {
+    try {
+      final materials = await RecordDatabase.instance.fetchBaseMaterials();
+      if (!mounted) return;
+      setState(() {
+        _baseMaterials = {for (var e in materials) e.name: e.unit};
+      });
+    } catch (e) {
+      debugPrint('加载基础材料失败: $e');
+    }
   }
 
   Future<void> _loadRecords() async {
@@ -347,6 +368,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     );
     _loadRecords();
     _loadAccounts();
+    _loadBaseMaterials();
   }
 
   Future<void> _deleteRecord(TransactionRecord record) async {
@@ -837,10 +859,16 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       final prefs = await SharedPreferences.getInstance();
       final billId = prefs.getInt(_prefKeyBillId);
       final accountId = prefs.getInt(_prefKeyAccountId);
+      final apiKey = prefs.getString(_prefKeyLongcatApiKey);
       if (mounted) {
         setState(() {
           if (billId != null) _currentBillId = billId;
           if (accountId != null) _currentAccountId = accountId;
+          if (apiKey != null && apiKey.trim().isNotEmpty) {
+            _longcatApiKey = apiKey.trim();
+          } else {
+            _longcatApiKey = _defaultLongcatApiKey;
+          }
         });
       }
     } catch (e) {
@@ -868,6 +896,65 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
   }
 
+  Future<void> _saveLongcatApiKey(String value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefKeyLongcatApiKey, value);
+    } catch (e) {
+      debugPrint('保存模型密钥失败: $e');
+    }
+  }
+
+  String _maskApiKey(String value) {
+    final trimmed = value.trim();
+    if (trimmed.length <= 8) {
+      return '已配置';
+    }
+    final prefix = trimmed.substring(0, 4);
+    final suffix = trimmed.substring(trimmed.length - 4);
+    return '$prefix****$suffix';
+  }
+
+  Future<void> _editLongcatApiKey() async {
+    final controller = TextEditingController(text: _longcatApiKey);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('配置 LongCat AK'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              hintText: '请输入 LongCat AK',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+    final trimmed = result?.trim();
+    if (trimmed == null) {
+      return;
+    }
+    final nextValue =
+        trimmed.isEmpty ? _defaultLongcatApiKey : trimmed;
+    setState(() {
+      _longcatApiKey = nextValue;
+    });
+    await _saveLongcatApiKey(nextValue);
+    _showMessage('已保存');
+  }
+
   @override
   void dispose() {
     _exitToastEntry?.remove();
@@ -889,7 +976,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.5),
+              color: Colors.black.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Text(
@@ -981,7 +1068,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 MaterialPageRoute(
                   builder: (context) => const ExtensionMenuPage(),
                 ),
-              );
+              ).then((_) => _loadBaseMaterials());
             },
             icon: const Icon(Icons.apps),
           ),
@@ -1382,6 +1469,35 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           children: [
             Expanded(
               child: Text(
+                '大模型配置',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.smart_toy_outlined),
+                title: const Text('LongCat AK'),
+                subtitle: Text('当前：${_maskApiKey(_longcatApiKey)}'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _editLongcatApiKey,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
                 '账单数据导出',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
@@ -1577,7 +1693,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       );
       if (shouldExport == true) {
         final xFiles = [XFile(path)];
-        await Share.shareXFiles(xFiles, text: 'FinFlow 数据备份');
+        await SharePlus.instance.share(
+          ShareParams(files: xFiles, text: 'FinFlow 数据备份'),
+        );
       }
     } catch (e) {
       if (!mounted) return;
@@ -1661,7 +1779,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                                IconButton(
                                 icon: const Icon(Icons.share, size: 20),
                                 onPressed: () {
-                                  Share.shareXFiles([XFile(file.path)]);
+                                  SharePlus.instance.share(
+                                    ShareParams(files: [XFile(file.path)]),
+                                  );
                                 },
                               ),
                               IconButton(
@@ -1810,11 +1930,19 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     );
   }
 
+  bool _isMaterialInBaseList(TransactionRecord record) {
+    if (record.category != '课程材料' || record.note == null) return false;
+    final parts = record.note!.split(_materialNoteSplitter);
+    final materialName = parts.isNotEmpty ? parts[0].trim() : '';
+    return _baseMaterials.containsKey(materialName);
+  }
+
   Widget _buildRecordItem(
     TransactionRecord record, {
     required bool showDivider,
   }) {
     // 单条记录展示
+    final isMarked = _isMaterialInBaseList(record);
     return InkWell(
         onTap: () => _openForm(record: record),
         onLongPress: () async {
@@ -1834,6 +1962,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           ),
           child: Row(
             children: [
+              if (isMarked)
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: const Icon(
+                    Icons.verified,
+                    size: 16,
+                    color: Color(0xFF1B7F5A),
+                  ),
+                ),
               Expanded(
                 child: Text(
                   _buildRecordTitle(record),
@@ -1862,6 +1999,26 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (note == null || note.isEmpty) {
       return record.category;
     }
+
+    // 课程材料特殊处理：如果匹配基础材料，显示单位
+    if (record.category == '课程材料') {
+      final parts = note.split(_materialNoteSplitter);
+      if (parts.isNotEmpty) {
+        final name = parts[0].trim();
+        // 匹配到基础材料
+        if (_baseMaterials.containsKey(name)) {
+          final unit = _baseMaterials[name];
+          // 如果有数量
+          if (parts.length > 1) {
+            final quantity = parts[1].trim();
+            return '$name · $quantity$unit';
+          }
+          // 只有名称
+          return '$name · $unit';
+        }
+      }
+    }
+
     final preview = note.length > 6 ? note.substring(0, 6) : note;
     return '${record.category} · $preview';
   }
@@ -2061,7 +2218,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         mimeType:
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       );
-      await Share.shareXFiles([file]);
+      await SharePlus.instance.share(
+        ShareParams(files: [file]),
+      );
       debugPrint('Android 分享面板已唤起');
       return true;
     } catch (_) {

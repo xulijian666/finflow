@@ -133,3 +133,34 @@ class Account {
     );
   }
 }
+
+// 基础材料实体
+class BaseMaterial {
+  BaseMaterial({
+    this.id,
+    required this.name,
+    required this.unit,
+  });
+
+  final int? id;
+  final String name;
+  final String unit;
+
+  // 转换为数据库存储 Map
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'unit': unit,
+    };
+  }
+
+  // 从数据库 Map 构建基础材料
+  static BaseMaterial fromMap(Map<String, Object?> map) {
+    return BaseMaterial(
+      id: map['id'] as int?,
+      name: map['name'] as String,
+      unit: map['unit'] as String,
+    );
+  }
+}

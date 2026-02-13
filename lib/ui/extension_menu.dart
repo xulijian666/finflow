@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'savings_goals.dart';
-import 'category_overview.dart';
+import 'material_inventory_page.dart';
+import 'base_materials_page.dart';
 
 // 扩展功能入口页
 class ExtensionMenuPage extends StatelessWidget {
@@ -12,16 +12,16 @@ class ExtensionMenuPage extends StatelessWidget {
     // 扩展入口清单
     final items = [
       ExtensionMenuItem(
-        title: '储蓄目标',
-        subtitle: '设置目标与累计',
-        icon: Icons.savings_outlined,
-        builder: (context) => const SavingsGoalPage(),
+        title: '基础材料',
+        subtitle: '维护材料数据',
+        icon: Icons.inventory_2_outlined,
+        builder: (context) => const BaseMaterialsPage(),
       ),
       ExtensionMenuItem(
-        title: '分类速览',
-        subtitle: '查看分类汇总',
-        icon: Icons.pie_chart_outline,
-        builder: (context) => const CategoryOverviewPage(),
+        title: '材料库存',
+        subtitle: '查询库存变动',
+        icon: Icons.warehouse_outlined,
+        builder: (context) => const MaterialInventoryPage(),
       ),
     ];
 

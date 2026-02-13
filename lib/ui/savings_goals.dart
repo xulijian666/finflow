@@ -10,7 +10,7 @@ class SavingsGoalPage extends StatefulWidget {
 
 class _SavingsGoalPageState extends State<SavingsGoalPage> {
   // 目标金额与当前进度
-  double _goalAmount = 12000;
+  final double _goalAmount = 12000;
   double _currentAmount = 3200;
 
   // 计算进度百分比
