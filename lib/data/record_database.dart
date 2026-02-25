@@ -1,211 +1,231 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart' as sqflite;
-import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
+import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'reimbursement.dart';
 import 'transaction_record.dart';
 
-// 数据库访问单例，封装账本、账户、记账记录的读写与维护
+class InventoryRecord {
+  InventoryRecord({
+    this.id,
+    required this.materialName,
+    required this.quantity,
+    this.unit,
+    this.recordId,
+    required this.createdAt,
+    this.amount,
+  });
+
+  final int? id;
+  final String materialName;
+  final double quantity;
+  final String? unit;
+  final int? recordId;
+  final String createdAt;
+  final double? amount;
+
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'material_name': materialName,
+      'quantity': quantity,
+      'unit': unit,
+      'record_id': recordId,
+      'created_at': createdAt,
+    };
+  }
+
+  static InventoryRecord fromMap(Map<String, Object?> map) {
+    return InventoryRecord(
+      id: map['id'] as int?,
+      materialName: map['material_name'] as String,
+      quantity: (map['quantity'] as num).toDouble(),
+      unit: map['unit'] as String?,
+      recordId: map['record_id'] as int?,
+      createdAt: map['created_at'] as String,
+      amount: (map['amount'] as num?)?.toDouble(),
+    );
+  }
+}
+
+class InventorySummary {
+  InventorySummary({
+    required this.materialName,
+    this.unit,
+    required this.purchasedQuantity,
+    required this.outQuantity,
+    required this.remainingQuantity,
+    required this.totalAmount,
+  });
+
+  final String materialName;
+  final String? unit;
+  final double purchasedQuantity;
+  final double outQuantity;
+  final double remainingQuantity;
+  final double totalAmount;
+
+  static InventorySummary fromMap(Map<String, Object?> map) {
+    return InventorySummary(
+      materialName: map['material_name'] as String,
+      unit: map['unit'] as String?,
+      purchasedQuantity: (map['purchased_quantity'] as num?)?.toDouble() ?? 0,
+      outQuantity: (map['out_quantity'] as num?)?.toDouble() ?? 0,
+      remainingQuantity: (map['remaining_quantity'] as num?)?.toDouble() ?? 0,
+      totalAmount: (map['total_amount'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
+class InventoryOutRecord {
+  InventoryOutRecord({
+    this.id,
+    required this.materialName,
+    required this.quantity,
+    this.unit,
+    this.note,
+    required this.createdAt,
+  });
+
+  final int? id;
+  final String materialName;
+  final double quantity;
+  final String? unit;
+  final String? note;
+  final String createdAt;
+
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'material_name': materialName,
+      'quantity': quantity,
+      'unit': unit,
+      'note': note,
+      'created_at': createdAt,
+    };
+  }
+
+  static InventoryOutRecord fromMap(Map<String, Object?> map) {
+    return InventoryOutRecord(
+      id: map['id'] as int?,
+      materialName: map['material_name'] as String,
+      quantity: (map['quantity'] as num).toDouble(),
+      unit: map['unit'] as String?,
+      note: map['note'] as String?,
+      createdAt: map['created_at'] as String,
+    );
+  }
+}
+
+class InventoryDetailRecord {
+  InventoryDetailRecord({
+    required this.id,
+    required this.materialName,
+    required this.quantity,
+    this.unit,
+    required this.createdAt,
+    this.amount,
+    this.note,
+    required this.isOutbound,
+  });
+
+  final int id;
+  final String materialName;
+  final double quantity;
+  final String? unit;
+  final String createdAt;
+  final double? amount;
+  final String? note;
+  final bool isOutbound;
+}
+
 class RecordDatabase {
   RecordDatabase._internal();
 
-  // 全局唯一实例
   static final RecordDatabase instance = RecordDatabase._internal();
-  // 数据库文件名与内置资产路径
-  static const String _dbName = 'finflow.db'; 
-  static const String _assetDbPath = 'assets/finflow.db';
-  // 表名常量
+
+  static const String _dbName = 'finflow.db';
+  // 数据库版本升级用于触发表结构更新
+  static const int _dbVersion = 6;
   static const String _tableName = 'records';
   static const String _billTableName = 'bills';
   static const String _accountTableName = 'accounts';
   static const String _baseMaterialTableName = 'base_materials';
   static const String _inventoryTableName = 'inventory_records';
-  // 默认账本与账户
-  static const int _defaultBillId = 1;
-  static const String _defaultBillName = '默认账本';
-  static const int _defaultAccountId = 1;
-  static const String _defaultAccountName = '默认账户';
+  static const String _inventoryOutTableName = 'inventory_out_records';
+  static const String _reimbursementTableName = 'reimbursements';
 
-  // 当前数据库连接缓存
-  sqflite.Database? _database;
+  Database? _database;
+  int? _defaultBillId;
+  int? _defaultAccountId;
 
-  // 获取应用目录下数据库文件路径
-  Future<String> getDatabasePath() async {
-    final directory = await getApplicationDocumentsDirectory();
-    return p.join(directory.path, _dbName);
-  }
+  int get defaultBillId => _defaultBillId ?? 1;
+  int get defaultAccountId => _defaultAccountId ?? 1;
 
-  // 关闭数据库连接并释放缓存
-  Future<void> close() async {
-    final db = _database;
-    if (db != null) {
-      await db.close();
-      _database = null;
-    }
-  }
-
-  // 创建数据库备份并清理旧备份
-  Future<String> backup() async {
-    final dbPath = await getDatabasePath();
-    final directory = await getApplicationDocumentsDirectory();
-    final backupDir = Directory(p.join(directory.path, 'backups'));
-    if (!await backupDir.exists()) {
-      await backupDir.create(recursive: true);
-    }
-
-    final now = DateTime.now();
-    final timestamp =
-        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
-    final backupPath = p.join(backupDir.path, 'finflow_backup_$timestamp.db');
-
-    // 确保数据库已落盘
-    final db = await database;
-    try {
-      await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
-    } catch (_) {}
-    
-    await File(dbPath).copy(backupPath);
-    await _cleanOldBackups(backupDir);
-    return backupPath;
-  }
-
-  // 仅保留最新的备份文件
-  Future<void> _cleanOldBackups(Directory backupDir) async {
-    try {
-      final entities = await backupDir.list().toList();
-      final backups = entities.whereType<File>().where((file) {
-        return p.basename(file.path).startsWith('finflow_backup_') &&
-            p.basename(file.path).endsWith('.db');
-      }).toList();
-
-      if (backups.length > 3) {
-        // 按修改时间排序，最旧的在前面
-        backups.sort((a, b) => a.lastModifiedSync().compareTo(b.lastModifiedSync()));
-        final toDelete = backups.sublist(0, backups.length - 3);
-        for (final file in toDelete) {
-          await file.delete();
-        }
-      }
-    } catch (e) {
-      debugPrint('清理旧备份失败: $e');
-    }
-  }
-
-  // 获取本地备份列表
-  Future<List<File>> getBackups() async {
-    final directory = await getApplicationDocumentsDirectory();
-    final backupDir = Directory(p.join(directory.path, 'backups'));
-    if (!await backupDir.exists()) {
-      return [];
-    }
-
-    final entities = await backupDir.list().toList();
-    final backups = entities.whereType<File>().where((file) {
-      return p.basename(file.path).startsWith('finflow_backup_') &&
-          p.basename(file.path).endsWith('.db');
-    }).toList();
-
-    // 按修改时间倒序排列，最新的在前面
-    backups.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-    return backups;
-  }
-
-  // 从指定路径恢复数据库并重新初始化连接
-  Future<void> restore(String sourcePath) async {
-    await close();
-    final dbPath = await getDatabasePath();
-    final sourceFile = File(sourcePath);
-    if (await sourceFile.exists()) {
-       await sourceFile.copy(dbPath);
-    } else {
-       throw Exception('备份文件不存在');
-    }
-    // 重新初始化连接
-    await database;
-  }
-
-  // 获取数据库连接，必要时初始化并补齐表结构
-  Future<sqflite.Database> get database async {
-    final existing = _database;
-    if (existing != null) {
-      await _ensureSchema(existing);
-      return existing;
+  Future<Database> get database async {
+    if (_database != null) {
+      return _database!;
     }
     _database = await _initDatabase();
-    await _ensureSchema(_database!);
     return _database!;
   }
 
-  // 初始化数据库文件与平台适配
-  Future<sqflite.Database> _initDatabase() async {
-    final directory = await getApplicationDocumentsDirectory();
-    await Directory(directory.path).create(recursive: true);
-    final path = p.join(directory.path, _dbName);
-    final file = File(path);
-    if (!await file.exists()) {
-      final data = await rootBundle.load(_assetDbPath);
-      final bytes = data.buffer.asUint8List(
-        data.offsetInBytes,
-        data.lengthInBytes,
-      );
-      await file.writeAsBytes(bytes, flush: true);
-    }
-    debugPrint('SQLite 数据库路径：$path');
+  Future<Database> _initDatabase() async {
     if (Platform.isWindows) {
-      ffi.sqfliteFfiInit();
-      sqflite.databaseFactory = ffi.databaseFactoryFfi;
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
     }
-    return sqflite.openDatabase(
-      path,
-      version: 5,
+    final dbPath = await _dbFilePath();
+    final exists = await File(dbPath).exists();
+    if (!exists) {
+      try {
+        await _copyAssetDatabase(dbPath);
+      } catch (_) {}
+    }
+    return openDatabase(
+      dbPath,
+      version: _dbVersion,
       onCreate: _createDb,
       onUpgrade: _upgradeDb,
     );
   }
 
-  // 初始化创建表结构与默认数据
-  Future<void> _createDb(sqflite.Database db, int version) async {
-    await db.execute(
-      '''
-      CREATE TABLE $_billTableName (
+  Future<String> _dbFilePath() async {
+    final databasesPath = await getDatabasesPath();
+    await Directory(databasesPath).create(recursive: true);
+    return p.join(databasesPath, _dbName);
+  }
+
+  Future<void> _copyAssetDatabase(String targetPath) async {
+    final bytes = await rootBundle.load('assets/finflow.db');
+    final buffer = bytes.buffer;
+    await File(targetPath).writeAsBytes(
+      buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+      flush: true,
+    );
+  }
+
+  Future<void> _createDb(Database db, int version) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_billTableName (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         is_default INTEGER NOT NULL DEFAULT 0
       )
-      ''',
-    );
-    await db.insert(
-      _billTableName,
-      {
-        'id': _defaultBillId,
-        'name': _defaultBillName,
-        'is_default': 1,
-      },
-    );
-    await db.execute(
-      '''
-      CREATE TABLE $_accountTableName (
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_accountTableName (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         is_default INTEGER NOT NULL DEFAULT 0
       )
-      ''',
-    );
-    await db.insert(
-      _accountTableName,
-      {
-        'id': _defaultAccountId,
-        'name': _defaultAccountName,
-        'is_default': 1,
-      },
-    );
-    await db.execute(
-      '''
-      CREATE TABLE $_tableName (
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_tableName (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         bill_id INTEGER NOT NULL,
         account_id INTEGER NOT NULL,
@@ -213,22 +233,19 @@ class RecordDatabase {
         amount REAL NOT NULL,
         category TEXT NOT NULL,
         date TEXT NOT NULL,
-        note TEXT
+        note TEXT,
+        reimbursement_id INTEGER
       )
-      ''',
-    );
-    await db.execute(
-      '''
-      CREATE TABLE $_baseMaterialTableName (
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_baseMaterialTableName (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         unit TEXT NOT NULL
       )
-      ''',
-    );
-    await db.execute(
-      '''
-      CREATE TABLE $_inventoryTableName (
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_inventoryTableName (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         material_name TEXT NOT NULL,
         quantity REAL NOT NULL,
@@ -236,335 +253,277 @@ class RecordDatabase {
         record_id INTEGER,
         created_at TEXT NOT NULL
       )
-      ''',
-    );
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_inventoryOutTableName (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        material_name TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        unit TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_reimbursementTableName (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        total_amount REAL NOT NULL,
+        date TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT NOT NULL
+      )
+    ''');
   }
 
-  // 数据库版本升级与字段迁移
-  Future<void> _upgradeDb(
-    sqflite.Database db,
-    int oldVersion,
-    int newVersion,
+  Future<void> _upgradeDb(Database db, int oldVersion, int newVersion) async {
+    // 统一走建表逻辑，确保新增表在旧库中创建
+    await _createDb(db, newVersion);
+    await _ensureColumn(db, _tableName, 'bill_id', 'INTEGER NOT NULL DEFAULT 1');
+    await _ensureColumn(db, _tableName, 'account_id', 'INTEGER NOT NULL DEFAULT 1');
+    await _ensureColumn(db, _tableName, 'reimbursement_id', 'INTEGER');
+  }
+
+  Future<void> _ensureColumn(
+    Database db,
+    String table,
+    String column,
+    String definition,
   ) async {
-    if (oldVersion < 2) {
-      await db.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS $_billTableName (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          is_default INTEGER NOT NULL DEFAULT 0
-        )
-        ''',
-      );
-      final existing = await db.query(
-        _billTableName,
-        where: 'id = ?',
-        whereArgs: [_defaultBillId],
-        limit: 1,
-      );
-      if (existing.isEmpty) {
-        await db.insert(
-          _billTableName,
-          {
-            'id': _defaultBillId,
-            'name': _defaultBillName,
-            'is_default': 1,
-          },
-        );
-      }
-      await db.execute(
-        'ALTER TABLE $_tableName ADD COLUMN bill_id INTEGER NOT NULL DEFAULT $_defaultBillId',
-      );
-      await db.update(
-        _tableName,
-        {'bill_id': _defaultBillId},
-        where: 'bill_id IS NULL',
-      );
-    }
-    if (oldVersion < 3) {
-      await db.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS $_accountTableName (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          is_default INTEGER NOT NULL DEFAULT 0
-        )
-        ''',
-      );
-      final existing = await db.query(
-        _accountTableName,
-        where: 'id = ?',
-        whereArgs: [_defaultAccountId],
-        limit: 1,
-      );
-      if (existing.isEmpty) {
-        await db.insert(
-          _accountTableName,
-          {
-            'id': _defaultAccountId,
-            'name': _defaultAccountName,
-            'is_default': 1,
-          },
-        );
-      }
-      await db.execute(
-        'ALTER TABLE $_tableName ADD COLUMN account_id INTEGER NOT NULL DEFAULT $_defaultAccountId',
-      );
-      await db.update(
-        _tableName,
-        {'account_id': _defaultAccountId},
-        where: 'account_id IS NULL',
-      );
-    }
-    if (oldVersion < 4) {
-      await db.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS $_baseMaterialTableName (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          unit TEXT NOT NULL
-        )
-        ''',
-      );
-    }
-    if (oldVersion < 5) {
-      await db.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS $_inventoryTableName (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          material_name TEXT NOT NULL,
-          quantity REAL NOT NULL,
-          unit TEXT,
-          record_id INTEGER,
-          created_at TEXT NOT NULL
-        )
-        ''',
-      );
+    final result = await db.rawQuery('PRAGMA table_info($table)');
+    final exists = result.any((row) => row['name'] == column);
+    if (!exists) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
     }
   }
 
-  // 启动时补齐缺失表与缺失字段
-  Future<void> _ensureSchema(sqflite.Database db) async {
-    final tables = await db.rawQuery(
-      "SELECT name FROM sqlite_master WHERE type='table'",
-    );
-    final tableNames = tables.map((e) => e['name'] as String).toSet();
-    if (!tableNames.contains(_billTableName)) {
-      await db.execute(
-        '''
-        CREATE TABLE $_billTableName (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          is_default INTEGER NOT NULL DEFAULT 0
-        )
-        ''',
-      );
-    }
-    final defaultBillExists = await db.query(
-      _billTableName,
-      where: 'id = ?',
-      whereArgs: [_defaultBillId],
-      limit: 1,
-    );
-    if (defaultBillExists.isEmpty) {
-      await db.insert(
-        _billTableName,
-        {
-          'id': _defaultBillId,
-          'name': _defaultBillName,
-          'is_default': 1,
-        },
-      );
-    }
-
-    if (!tableNames.contains(_accountTableName)) {
-      await db.execute(
-        '''
-        CREATE TABLE $_accountTableName (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          is_default INTEGER NOT NULL DEFAULT 0
-        )
-        ''',
-      );
-    }
-    final defaultAccountExists = await db.query(
-      _accountTableName,
-      where: 'id = ?',
-      whereArgs: [_defaultAccountId],
-      limit: 1,
-    );
-    if (defaultAccountExists.isEmpty) {
-      await db.insert(
-        _accountTableName,
-        {
-          'id': _defaultAccountId,
-          'name': _defaultAccountName,
-          'is_default': 1,
-        },
-      );
-    }
-
-    final recordColumns =
-        await db.rawQuery("PRAGMA table_info($_tableName)");
-    final columnNames =
-        recordColumns.map((e) => e['name'] as String).toSet();
-    if (!columnNames.contains('bill_id')) {
-      await db.execute(
-        'ALTER TABLE $_tableName ADD COLUMN bill_id INTEGER NOT NULL DEFAULT $_defaultBillId',
-      );
-      await db.update(
-        _tableName,
-        {'bill_id': _defaultBillId},
-        where: 'bill_id IS NULL',
-      );
-    }
-    if (!columnNames.contains('account_id')) {
-      await db.execute(
-        'ALTER TABLE $_tableName ADD COLUMN account_id INTEGER NOT NULL DEFAULT $_defaultAccountId',
-      );
-      await db.update(
-        _tableName,
-        {'account_id': _defaultAccountId},
-        where: 'account_id IS NULL',
-      );
-    }
-    if (!tableNames.contains(_baseMaterialTableName)) {
-      await db.execute(
-        '''
-        CREATE TABLE $_baseMaterialTableName (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          unit TEXT NOT NULL
-        )
-        ''',
-      );
-    }
-    if (!tableNames.contains(_inventoryTableName)) {
-      await db.execute(
-        '''
-        CREATE TABLE $_inventoryTableName (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          material_name TEXT NOT NULL,
-          quantity REAL NOT NULL,
-          unit TEXT,
-          record_id INTEGER,
-          created_at TEXT NOT NULL
-        )
-        ''',
-      );
-    }
-  }
-
-  // 确保默认账本与默认账户存在
   Future<void> ensureDefaultBillAndAccount() async {
     final db = await database;
-    final defaultBillExists = await db.query(
+    final bills = await db.query(_billTableName, orderBy: 'id ASC');
+    if (bills.isEmpty) {
+      final id = await db.insert(_billTableName, {
+        'name': '默认账本',
+        'is_default': 1,
+      });
+      _defaultBillId = id;
+    } else {
+      final defaultBill = bills.firstWhere(
+        (e) => (e['is_default'] as int? ?? 0) == 1,
+        orElse: () => bills.first,
+      );
+      _defaultBillId = defaultBill['id'] as int?;
+      if ((defaultBill['is_default'] as int? ?? 0) != 1) {
+        await db.update(
+          _billTableName,
+          {'is_default': 1},
+          where: 'id = ?',
+          whereArgs: [_defaultBillId],
+        );
+      }
+    }
+
+    final accounts = await db.query(_accountTableName, orderBy: 'id ASC');
+    if (accounts.isEmpty) {
+      final id = await db.insert(_accountTableName, {
+        'name': '默认账户',
+        'is_default': 1,
+      });
+      _defaultAccountId = id;
+    } else {
+      final defaultAccount = accounts.firstWhere(
+        (e) => (e['is_default'] as int? ?? 0) == 1,
+        orElse: () => accounts.first,
+      );
+      _defaultAccountId = defaultAccount['id'] as int?;
+      if ((defaultAccount['is_default'] as int? ?? 0) != 1) {
+        await db.update(
+          _accountTableName,
+          {'is_default': 1},
+          where: 'id = ?',
+          whereArgs: [_defaultAccountId],
+        );
+      }
+    }
+  }
+
+  Future<List<Bill>> fetchBills() async {
+    final db = await database;
+    final maps = await db.query(_billTableName, orderBy: 'id ASC');
+    return maps.map(Bill.fromMap).toList();
+  }
+
+  Future<int> insertBill(String name) async {
+    final db = await database;
+    final currentBills = await fetchBills();
+    final isDefault = currentBills.isEmpty ? 1 : 0;
+    final id = await db.insert(_billTableName, {
+      'name': name,
+      'is_default': isDefault,
+    });
+    if (isDefault == 1) {
+      _defaultBillId = id;
+    }
+    return id;
+  }
+
+  Future<void> updateBillName(int billId, String name) async {
+    final db = await database;
+    await db.update(
       _billTableName,
+      {'name': name},
       where: 'id = ?',
-      whereArgs: [_defaultBillId],
-      limit: 1,
+      whereArgs: [billId],
     );
-    if (defaultBillExists.isEmpty) {
-      await db.insert(
-        _billTableName,
-        {
-          'id': _defaultBillId,
-          'name': _defaultBillName,
-          'is_default': 1,
-        },
-      );
-    }
-    final defaultAccountExists = await db.query(
-      _accountTableName,
-      where: 'id = ?',
-      whereArgs: [_defaultAccountId],
-      limit: 1,
-    );
-    if (defaultAccountExists.isEmpty) {
-      await db.insert(
-        _accountTableName,
-        {
-          'id': _defaultAccountId,
-          'name': _defaultAccountName,
-          'is_default': 1,
-        },
-      );
-    }
   }
 
-  // 新增记账记录
-  Future<int> insertRecord(TransactionRecord record) async {
+  Future<int> countRecordsByBill(int billId) async {
     final db = await database;
-    return db.insert(_tableName, record.toMap());
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) AS total FROM $_tableName WHERE bill_id = ?',
+      [billId],
+    );
+    return (result.first['total'] as int?) ?? 0;
   }
 
-  // 更新记账记录
-  Future<int> updateRecord(TransactionRecord record) async {
+  Future<void> migrateBillRecordsToDefault(int billId) async {
     final db = await database;
-    return db.update(
+    await db.update(
       _tableName,
-      record.toMap(),
-      where: 'id = ?',
-      whereArgs: [record.id],
-    );
-  }
-
-  // 删除指定记录
-  Future<int> deleteRecord(int id) async {
-    final db = await database;
-    await db.delete(
-      _inventoryTableName,
-      where: 'record_id = ?',
-      whereArgs: [id],
-    );
-    return db.delete(
-      _tableName,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  // 获取账本下的全部记录
-  Future<List<TransactionRecord>> fetchRecords({required int billId}) async {
-    final db = await database;
-    final maps = await db.query(
-      _tableName,
+      {'bill_id': defaultBillId},
       where: 'bill_id = ?',
       whereArgs: [billId],
+    );
+  }
+
+  Future<void> deleteBill(int billId) async {
+    final db = await database;
+    await db.delete(
+      _billTableName,
+      where: 'id = ?',
+      whereArgs: [billId],
+    );
+  }
+
+  Future<void> deleteBillWithRecords(int billId) async {
+    final db = await database;
+    final recordIds = await db.rawQuery(
+      'SELECT id FROM $_tableName WHERE bill_id = ?',
+      [billId],
+    );
+    if (recordIds.isNotEmpty) {
+      final ids = recordIds.map((e) => e['id'] as int).toList();
+      final placeholders = List.filled(ids.length, '?').join(',');
+      await db.delete(
+        _inventoryTableName,
+        where: 'record_id IN ($placeholders)',
+        whereArgs: ids,
+      );
+      await db.delete(
+        _tableName,
+        where: 'id IN ($placeholders)',
+        whereArgs: ids,
+      );
+    }
+    await deleteBill(billId);
+  }
+
+  Future<List<Account>> fetchAccounts() async {
+    final db = await database;
+    final maps = await db.query(_accountTableName, orderBy: 'id ASC');
+    return maps.map(Account.fromMap).toList();
+  }
+
+  Future<int> insertAccount(String name) async {
+    final db = await database;
+    final accounts = await fetchAccounts();
+    final isDefault = accounts.isEmpty ? 1 : 0;
+    final id = await db.insert(_accountTableName, {
+      'name': name,
+      'is_default': isDefault,
+    });
+    if (isDefault == 1) {
+      _defaultAccountId = id;
+    }
+    return id;
+  }
+
+  Future<void> updateAccountName(int accountId, String name) async {
+    final db = await database;
+    await db.update(
+      _accountTableName,
+      {'name': name},
+      where: 'id = ?',
+      whereArgs: [accountId],
+    );
+  }
+
+  Future<void> deleteAccount(int accountId) async {
+    final db = await database;
+    await db.update(
+      _tableName,
+      {'account_id': defaultAccountId},
+      where: 'account_id = ?',
+      whereArgs: [accountId],
+    );
+    await db.delete(
+      _accountTableName,
+      where: 'id = ?',
+      whereArgs: [accountId],
+    );
+  }
+
+  Future<Map<int, double>> fetchAccountBalances() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT account_id,
+             SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END) AS balance
+      FROM $_tableName
+      GROUP BY account_id
+    ''');
+    return {
+      for (final row in rows)
+        row['account_id'] as int: (row['balance'] as num?)?.toDouble() ?? 0
+    };
+  }
+
+  Future<List<TransactionRecord>> fetchRecordsByKeyword({
+    required int billId,
+    required String keyword,
+  }) async {
+    final db = await database;
+    final like = '%$keyword%';
+    final maps = await db.query(
+      _tableName,
+      where: 'bill_id = ? AND (note LIKE ? OR category LIKE ? OR amount LIKE ?)',
+      whereArgs: [billId, like, like, like],
       orderBy: 'date DESC, id DESC',
     );
     return maps.map(TransactionRecord.fromMap).toList();
   }
 
-  // 获取最近有记录的日期列表
   Future<List<String>> fetchRecentRecordDates({
     required int billId,
     String? beforeDate,
-    int limit = 3,
+    required int limit,
   }) async {
     final db = await database;
     final where = <String>['bill_id = ?'];
     final args = <Object?>[billId];
-    if (beforeDate != null) {
-      where.add("substr(date, 1, 10) < ?");
+    if (beforeDate != null && beforeDate.isNotEmpty) {
+      where.add('date(date) < date(?)');
       args.add(beforeDate);
     }
-    final rows = await db.rawQuery(
-      '''
-      SELECT substr(date, 1, 10) AS day
-      FROM $_tableName
-      WHERE ${where.join(' AND ')}
-      GROUP BY day
-      ORDER BY day DESC
-      LIMIT ?
-      ''',
-      [...args, limit],
+    final rows = await db.query(
+      _tableName,
+      columns: ['date(date) AS date_key'],
+      where: where.join(' AND '),
+      whereArgs: args,
+      groupBy: 'date_key',
+      orderBy: 'date_key DESC',
+      limit: limit,
     );
-    return rows.map((row) => row['day'] as String).toList();
+    return rows.map((e) => e['date_key'] as String).toList();
   }
 
-  // 按日期集合批量获取记录
   Future<List<TransactionRecord>> fetchRecordsByDates({
     required int billId,
     required List<String> dateKeys,
@@ -574,36 +533,59 @@ class RecordDatabase {
     }
     final db = await database;
     final placeholders = List.filled(dateKeys.length, '?').join(',');
-    final rows = await db.rawQuery(
+    final maps = await db.rawQuery(
       '''
-      SELECT *
-      FROM $_tableName
+      SELECT * FROM $_tableName
       WHERE bill_id = ?
-        AND substr(date, 1, 10) IN ($placeholders)
+        AND date(date) IN ($placeholders)
       ORDER BY date DESC, id DESC
       ''',
       [billId, ...dateKeys],
     );
-    return rows.map(TransactionRecord.fromMap).toList();
+    return maps.map(TransactionRecord.fromMap).toList();
   }
 
-  // 按关键词检索记录
-  Future<List<TransactionRecord>> fetchRecordsByKeyword({
-    required int billId,
-    required String keyword,
-  }) async {
+  Future<int> insertRecord(TransactionRecord record) async {
     final db = await database;
-    final like = '%$keyword%';
-    final rows = await db.query(
-      _tableName,
-      where: 'bill_id = ? AND (note LIKE ? OR category LIKE ?)',
-      whereArgs: [billId, like, like],
-      orderBy: 'date DESC, id DESC',
-    );
-    return rows.map(TransactionRecord.fromMap).toList();
+    return db.insert(_tableName, record.toMap());
   }
 
-  // 构造导出所需的数据行
+  Future<void> updateRecord(TransactionRecord record) async {
+    final db = await database;
+    await db.update(
+      _tableName,
+      record.toMap(),
+      where: 'id = ?',
+      whereArgs: [record.id],
+    );
+  }
+
+  Future<void> deleteRecord(int id) async {
+    final db = await database;
+    await db.delete(
+      _inventoryTableName,
+      where: 'record_id = ?',
+      whereArgs: [id],
+    );
+    await db.delete(
+      _tableName,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> insertRecords(List<TransactionRecord> records) async {
+    if (records.isEmpty) {
+      return;
+    }
+    final db = await database;
+    final batch = db.batch();
+    for (final record in records) {
+      batch.insert(_tableName, record.toMap());
+    }
+    await batch.commit(noResult: true);
+  }
+
   Future<List<Map<String, Object?>>> fetchExportRows({
     DateTime? startDate,
     DateTime? endDate,
@@ -614,15 +596,12 @@ class RecordDatabase {
     final where = <String>[];
     final args = <Object?>[];
     if (startDate != null) {
-      final start = DateTime(startDate.year, startDate.month, startDate.day);
-      where.add('r.date >= ?');
-      args.add(start.toIso8601String());
+      where.add('date(date) >= date(?)');
+      args.add(startDate.toIso8601String());
     }
     if (endDate != null) {
-      final end = DateTime(endDate.year, endDate.month, endDate.day)
-          .add(const Duration(days: 1));
-      where.add('r.date < ?');
-      args.add(end.toIso8601String());
+      where.add('date(date) <= date(?)');
+      args.add(endDate.toIso8601String());
     }
     if (billId != null) {
       where.add('r.bill_id = ?');
@@ -632,323 +611,19 @@ class RecordDatabase {
       where.add('r.account_id = ?');
       args.add(accountId);
     }
-    final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
     final rows = await db.rawQuery(
       '''
-      SELECT r.date,
-             r.type,
-             r.amount,
-             r.category,
-             r.note,
-             b.name AS book_name,
-             a.name AS account_name
+      SELECT r.*, b.name AS book_name, a.name AS account_name
       FROM $_tableName r
       LEFT JOIN $_billTableName b ON r.bill_id = b.id
       LEFT JOIN $_accountTableName a ON r.account_id = a.id
-      $whereClause
+      $whereSql
       ORDER BY r.date DESC, r.id DESC
       ''',
       args,
     );
     return rows;
-  }
-
-  // 批量插入记录
-  Future<void> insertRecords(List<TransactionRecord> records) async {
-    if (records.isEmpty) {
-      return;
-    }
-    final db = await database;
-    await db.transaction((txn) async {
-      final batch = txn.batch();
-      for (final record in records) {
-        batch.insert(_tableName, record.toMap());
-      }
-      await batch.commit(noResult: true);
-    });
-  }
-
-  // 按主键获取单条记录
-  Future<TransactionRecord?> fetchRecord(int id) async {
-    final db = await database;
-    final maps = await db.query(
-      _tableName,
-      where: 'id = ?',
-      whereArgs: [id],
-      limit: 1,
-    );
-    if (maps.isEmpty) {
-      return null;
-    }
-    return TransactionRecord.fromMap(maps.first);
-  }
-
-  // 获取账本列表
-  Future<List<Bill>> fetchBills() async {
-    final db = await database;
-    final maps = await db.query(
-      _billTableName,
-      orderBy: 'is_default DESC, id ASC',
-    );
-    return maps.map(Bill.fromMap).toList();
-  }
-
-  // 新增账本
-  Future<int> insertBill(String name) async {
-    final db = await database;
-    return db.insert(_billTableName, {
-      'name': name,
-      'is_default': 0,
-    });
-  }
-
-  // 修改账本名称
-  Future<int> updateBillName(int id, String name) async {
-    final db = await database;
-    return db.update(
-      _billTableName,
-      {'name': name},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  // 删除账本（默认账本不可删除）
-  Future<int> deleteBill(int id) async {
-    if (id == _defaultBillId) {
-      return 0;
-    }
-    final db = await database;
-    return db.delete(
-      _billTableName,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  // 删除账本并清理对应记录
-  Future<int> deleteBillWithRecords(int id) async {
-    if (id == _defaultBillId) {
-      return 0;
-    }
-    final db = await database;
-    await db.delete(
-      _tableName,
-      where: 'bill_id = ?',
-      whereArgs: [id],
-    );
-    return db.delete(
-      _billTableName,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  // 统计账本记录数量
-  Future<int> countRecordsByBill(int billId) async {
-    final db = await database;
-    final rows = await db.rawQuery(
-      'SELECT COUNT(*) AS total FROM $_tableName WHERE bill_id = ?',
-      [billId],
-    );
-    if (rows.isEmpty) {
-      return 0;
-    }
-    final value = rows.first['total'];
-    return value is int ? value : (value as num?)?.toInt() ?? 0;
-  }
-
-  // 将账本记录迁移到默认账本
-  Future<int> migrateBillRecordsToDefault(int billId) async {
-    if (billId == _defaultBillId) {
-      return 0;
-    }
-    final db = await database;
-    return db.update(
-      _tableName,
-      {'bill_id': _defaultBillId},
-      where: 'bill_id = ?',
-      whereArgs: [billId],
-    );
-  }
-
-  // 获取账户列表，并在为空时补齐默认账户
-  Future<List<Account>> fetchAccounts() async {
-    final db = await database;
-    final maps = await db.query(
-      _accountTableName,
-      orderBy: 'id ASC',
-    );
-    final accounts = maps.map(Account.fromMap).toList();
-    if (accounts.isEmpty) {
-      await db.insert(
-        _accountTableName,
-        {
-          'id': _defaultAccountId,
-          'name': _defaultAccountName,
-          'is_default': 1,
-        },
-      );
-      final refreshed = await db.query(
-        _accountTableName,
-        orderBy: 'is_default DESC, id ASC',
-      );
-      return refreshed.map(Account.fromMap).toList();
-    }
-    return accounts;
-  }
-
-  // 新增账户
-  Future<int> insertAccount(String name) async {
-    final db = await database;
-    return db.insert(_accountTableName, {
-      'name': name,
-      'is_default': 0,
-    });
-  }
-
-  // 修改账户名称
-  Future<int> updateAccountName(int id, String name) async {
-    final db = await database;
-    return db.update(
-      _accountTableName,
-      {'name': name},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  // 删除账户并移除关联记录
-  Future<int> deleteAccount(int id) async {
-    if (id == _defaultAccountId) {
-      return 0;
-    }
-    final db = await database;
-    await db.delete(
-      _tableName,
-      where: 'account_id = ?',
-      whereArgs: [id],
-    );
-    return db.delete(
-      _accountTableName,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  // 设置默认账户
-  Future<void> setDefaultAccount(int id) async {
-    final db = await database;
-    await db.update(_accountTableName, {'is_default': 0});
-    await db.update(
-      _accountTableName,
-      {'is_default': 1},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  // 统计账户余额（收入为正、支出为负）
-  Future<Map<int, double>> fetchAccountBalances() async {
-    final db = await database;
-    final rows = await db.rawQuery(
-      '''
-      SELECT account_id,
-             SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END) AS balance
-      FROM $_tableName
-      GROUP BY account_id
-      ''',
-    );
-    final map = <int, double>{};
-    for (final row in rows) {
-      final id = row['account_id'] as int?;
-      if (id == null) {
-        continue;
-      }
-      final value = row['balance'];
-      map[id] = (value is num) ? value.toDouble() : 0;
-    }
-    return map;
-  }
-
-  // 清空所有记账记录
-  Future<void> clearAllRecords() async {
-    final db = await database;
-    await db.delete(_tableName);
-  }
-
-  // --- 基础材料管理 ---
-
-  Future<int> insertBaseMaterial(BaseMaterial material) async {
-    final db = await database;
-    return db.insert(_baseMaterialTableName, material.toMap());
-  }
-
-  // 批量更新或插入基础材料
-  Future<Map<String, int>> upsertBaseMaterials(List<BaseMaterial> materials) async {
-    final db = await database;
-    var inserted = 0;
-    var updated = 0;
-    
-    await db.transaction((txn) async {
-      for (final material in materials) {
-        final existing = await txn.query(
-          _baseMaterialTableName,
-          where: 'name = ?',
-          whereArgs: [material.name],
-        );
-        
-        if (existing.isNotEmpty) {
-           await txn.update(
-             _baseMaterialTableName,
-             {'unit': material.unit},
-             where: 'name = ?',
-             whereArgs: [material.name],
-           );
-           updated++;
-        } else {
-           await txn.insert(_baseMaterialTableName, {
-             'name': material.name,
-             'unit': material.unit,
-           });
-           inserted++;
-        }
-      }
-    });
-    return {'inserted': inserted, 'updated': updated};
-  }
-
-  // 替换所有基础材料
-  Future<int> replaceBaseMaterials(List<BaseMaterial> materials) async {
-    final db = await database;
-    return await db.transaction((txn) async {
-      await txn.delete(_baseMaterialTableName);
-      final batch = txn.batch();
-      for (final material in materials) {
-        batch.insert(_baseMaterialTableName, material.toMap());
-      }
-      await batch.commit(noResult: true);
-      return materials.length;
-    });
-  }
-
-  Future<int> updateBaseMaterial(BaseMaterial material) async {
-    final db = await database;
-    return db.update(
-      _baseMaterialTableName,
-      material.toMap(),
-      where: 'id = ?',
-      whereArgs: [material.id],
-    );
-  }
-
-  Future<int> deleteBaseMaterial(int id) async {
-    final db = await database;
-    return db.delete(
-      _baseMaterialTableName,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
   }
 
   Future<List<BaseMaterial>> fetchBaseMaterials({
@@ -957,13 +632,17 @@ class RecordDatabase {
     int? offset,
   }) async {
     final db = await database;
-    final query = keyword?.trim() ?? '';
-    final hasKeyword = query.isNotEmpty;
+    final where = <String>[];
+    final args = <Object?>[];
+    if (keyword != null && keyword.trim().isNotEmpty) {
+      where.add('name LIKE ?');
+      args.add('%${keyword.trim()}%');
+    }
     final maps = await db.query(
       _baseMaterialTableName,
-      where: hasKeyword ? 'name LIKE ?' : null,
-      whereArgs: hasKeyword ? ['%$query%'] : null,
-      orderBy: 'name COLLATE NOCASE ASC, id DESC',
+      where: where.isEmpty ? null : where.join(' AND '),
+      whereArgs: args.isEmpty ? null : args,
+      orderBy: 'id DESC',
       limit: limit,
       offset: offset,
     );
@@ -984,130 +663,356 @@ class RecordDatabase {
     return BaseMaterial.fromMap(maps.first);
   }
 
-  // --- 库存管理 ---
+  Future<int> insertBaseMaterial(BaseMaterial material) async {
+    final db = await database;
+    return db.insert(_baseMaterialTableName, material.toMap());
+  }
 
-  // 新增库存记录
-  Future<int> insertInventoryRecord({
+  Future<void> updateBaseMaterial(BaseMaterial material) async {
+    final db = await database;
+    await db.update(
+      _baseMaterialTableName,
+      material.toMap(),
+      where: 'id = ?',
+      whereArgs: [material.id],
+    );
+  }
+
+  Future<void> deleteBaseMaterial(int id) async {
+    final db = await database;
+    await db.delete(
+      _baseMaterialTableName,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<int> replaceBaseMaterials(List<BaseMaterial> materials) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      await txn.delete(_baseMaterialTableName);
+      final batch = txn.batch();
+      for (final material in materials) {
+        batch.insert(_baseMaterialTableName, material.toMap());
+      }
+      await batch.commit(noResult: true);
+      return materials.length;
+    });
+  }
+
+  Future<Map<String, int>> upsertBaseMaterials(
+    List<BaseMaterial> materials,
+  ) async {
+    final db = await database;
+    int inserted = 0;
+    int updated = 0;
+    await db.transaction((txn) async {
+      for (final material in materials) {
+        final existing = await txn.query(
+          _baseMaterialTableName,
+          where: 'name = ?',
+          whereArgs: [material.name],
+          limit: 1,
+        );
+        if (existing.isEmpty) {
+          await txn.insert(_baseMaterialTableName, material.toMap());
+          inserted += 1;
+        } else {
+          final id = existing.first['id'] as int;
+          await txn.update(
+            _baseMaterialTableName,
+            {'unit': material.unit},
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          updated += 1;
+        }
+      }
+    });
+    return {'inserted': inserted, 'updated': updated};
+  }
+
+  Future<void> insertInventoryRecord({
     required String materialName,
     required double quantity,
     String? unit,
     int? recordId,
   }) async {
     final db = await database;
-    return db.insert(_inventoryTableName, {
-      'material_name': materialName,
-      'quantity': quantity,
-      'unit': unit,
-      'record_id': recordId,
-      'created_at': DateTime.now().toIso8601String(),
-    });
+    final record = InventoryRecord(
+      materialName: materialName,
+      quantity: quantity,
+      unit: unit,
+      recordId: recordId,
+      createdAt: DateTime.now().toIso8601String(),
+    );
+    await db.insert(_inventoryTableName, record.toMap());
   }
 
-  // 删除关联的库存记录
-  Future<int> deleteInventoryByRecordId(int recordId) async {
+  Future<void> deleteInventoryByRecordId(int recordId) async {
     final db = await database;
-    return db.delete(
+    await db.delete(
       _inventoryTableName,
       where: 'record_id = ?',
       whereArgs: [recordId],
     );
   }
 
-  // 查询库存汇总
-  Future<List<InventorySummary>> fetchInventorySummary({String? keyword}) async {
+  Future<List<InventorySummary>> fetchInventorySummary({
+    String? keyword,
+  }) async {
     final db = await database;
-    final query = keyword?.trim() ?? '';
-    final whereClause = query.isNotEmpty ? 'WHERE i.material_name LIKE ?' : '';
-    final args = query.isNotEmpty ? ['%$query%'] : [];
-    
+    final where = <String>[];
+    final args = <Object?>[];
+    if (keyword != null && keyword.trim().isNotEmpty) {
+      where.add('bm.name LIKE ?');
+      args.add('%${keyword.trim()}%');
+    }
+    where.add('(COALESCE(in_sum.purchased_quantity, 0) > 0 OR COALESCE(out_sum.out_quantity, 0) > 0)');
+    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
     final rows = await db.rawQuery(
       '''
-      SELECT 
-        i.material_name, 
-        SUM(i.quantity) as total_quantity, 
-        MAX(i.unit) as unit,
-        SUM(r.amount) as total_amount
-      FROM $_inventoryTableName i
-      LEFT JOIN $_tableName r ON i.record_id = r.id
-      $whereClause
-      GROUP BY i.material_name
-      ORDER BY total_quantity DESC
+      SELECT bm.name AS material_name,
+             COALESCE(in_sum.unit, out_sum.unit, bm.unit) AS unit,
+             COALESCE(in_sum.purchased_quantity, 0) AS purchased_quantity,
+             COALESCE(out_sum.out_quantity, 0) AS out_quantity,
+             COALESCE(in_sum.purchased_quantity, 0) - COALESCE(out_sum.out_quantity, 0) AS remaining_quantity,
+             COALESCE(in_sum.total_amount, 0) AS total_amount
+      FROM $_baseMaterialTableName bm
+      LEFT JOIN (
+        SELECT ir.material_name,
+               ir.unit,
+               SUM(ir.quantity) AS purchased_quantity,
+               SUM(COALESCE(r.amount, 0)) AS total_amount
+        FROM $_inventoryTableName ir
+        LEFT JOIN $_tableName r ON ir.record_id = r.id
+        GROUP BY ir.material_name, ir.unit
+      ) in_sum ON in_sum.material_name = bm.name
+      LEFT JOIN (
+        SELECT orc.material_name,
+               orc.unit,
+               SUM(orc.quantity) AS out_quantity
+        FROM $_inventoryOutTableName orc
+        GROUP BY orc.material_name, orc.unit
+      ) out_sum ON out_sum.material_name = bm.name
+      $whereSql
+      ORDER BY remaining_quantity DESC
       ''',
       args,
     );
-    
-    return rows.map((row) => InventorySummary(
-      materialName: row['material_name'] as String,
-      totalQuantity: (row['total_quantity'] as num).toDouble(),
-      unit: row['unit'] as String?,
-      totalAmount: (row['total_amount'] as num?)?.toDouble() ?? 0.0,
-    )).toList();
+    return rows.map(InventorySummary.fromMap).toList();
   }
 
-  // 查询单个材料的库存明细
-  Future<List<InventoryRecord>> fetchInventoryDetails(String materialName) async {
+  Future<List<InventoryDetailRecord>> fetchInventoryDetails(String materialName) async {
     final db = await database;
     final rows = await db.rawQuery(
       '''
-      SELECT i.*, r.amount as record_amount
-      FROM $_inventoryTableName i
-      LEFT JOIN $_tableName r ON i.record_id = r.id
-      WHERE i.material_name = ?
-      ORDER BY i.created_at DESC
+      SELECT ir.id,
+             ir.material_name,
+             ir.quantity,
+             ir.unit,
+             ir.created_at,
+             r.amount AS amount,
+             r.note AS note,
+             'in' AS record_type
+      FROM $_inventoryTableName ir
+      LEFT JOIN $_tableName r ON ir.record_id = r.id
+      WHERE ir.material_name = ?
+      UNION ALL
+      SELECT orc.id,
+             orc.material_name,
+             orc.quantity,
+             orc.unit,
+             orc.created_at,
+             NULL AS amount,
+             orc.note AS note,
+             'out' AS record_type
+      FROM $_inventoryOutTableName orc
+      WHERE orc.material_name = ?
+      ORDER BY created_at DESC, id DESC
       ''',
-      [materialName],
+      [materialName, materialName],
     );
-    
-    return rows.map((row) => InventoryRecord.fromMap(row)).toList();
+    return rows
+        .map(
+          (row) => InventoryDetailRecord(
+            id: row['id'] as int,
+            materialName: row['material_name'] as String,
+            quantity: (row['quantity'] as num).toDouble(),
+            unit: row['unit'] as String?,
+            createdAt: row['created_at'] as String,
+            amount: (row['amount'] as num?)?.toDouble(),
+            note: row['note'] as String?,
+            isOutbound: (row['record_type'] as String) == 'out',
+          ),
+        )
+        .toList();
   }
 
-  // 默认账本与账户的固定主键
-  int get defaultBillId => _defaultBillId;
-  int get defaultAccountId => _defaultAccountId;
-}
-
-class InventorySummary {
-  final String materialName;
-  final double totalQuantity;
-  final String? unit;
-  final double totalAmount;
-
-  InventorySummary({
-    required this.materialName,
-    required this.totalQuantity,
-    this.unit,
-    this.totalAmount = 0.0,
-  });
-}
-
-class InventoryRecord {
-  final int id;
-  final String materialName;
-  final double quantity;
-  final String? unit;
-  final int? recordId;
-  final String createdAt;
-  final double? amount;
-
-  InventoryRecord({
-    required this.id,
-    required this.materialName,
-    required this.quantity,
-    this.unit,
-    this.recordId,
-    required this.createdAt,
-    this.amount,
-  });
-
-  static InventoryRecord fromMap(Map<String, dynamic> map) {
-    return InventoryRecord(
-      id: map['id'] as int,
-      materialName: map['material_name'] as String,
-      quantity: (map['quantity'] as num).toDouble(),
-      unit: map['unit'] as String?,
-      recordId: map['record_id'] as int?,
-      createdAt: map['created_at'] as String,
-      amount: (map['record_amount'] as num?)?.toDouble(),
+  Future<int> insertOutRecord({
+    required String materialName,
+    required double quantity,
+    String? unit,
+    String? note,
+    DateTime? outDate,
+  }) async {
+    final db = await database;
+    final record = InventoryOutRecord(
+      materialName: materialName,
+      quantity: quantity,
+      unit: unit,
+      note: note,
+      createdAt: (outDate ?? DateTime.now()).toIso8601String(),
     );
+    return db.insert(_inventoryOutTableName, record.toMap());
+  }
+
+  Future<void> updateOutRecord({
+    required int id,
+    required double quantity,
+    String? unit,
+    String? note,
+    DateTime? outDate,
+  }) async {
+    final db = await database;
+    await db.update(
+      _inventoryOutTableName,
+      {
+        'quantity': quantity,
+        'unit': unit,
+        'note': note,
+        'created_at': (outDate ?? DateTime.now()).toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> deleteOutRecord(int id) async {
+    final db = await database;
+    await db.delete(
+      _inventoryOutTableName,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<int> createReimbursement(
+    Reimbursement reimbursement,
+    List<int> recordIds,
+  ) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      final id = await txn.insert(
+        _reimbursementTableName,
+        reimbursement.toMap(),
+      );
+      for (final recordId in recordIds) {
+        await txn.update(
+          _tableName,
+          {'reimbursement_id': id},
+          where: 'id = ?',
+          whereArgs: [recordId],
+        );
+      }
+      return id;
+    });
+  }
+
+  Future<List<Reimbursement>> fetchReimbursements() async {
+    final db = await database;
+    final maps = await db.query(
+      _reimbursementTableName,
+      orderBy: 'date DESC, id DESC',
+    );
+    return maps.map(Reimbursement.fromMap).toList();
+  }
+
+  Future<List<TransactionRecord>> fetchUnreimbursedRecords() async {
+    final db = await database;
+    final maps = await db.query(
+      _tableName,
+      where: 'reimbursement_id IS NULL AND type = ?',
+      whereArgs: ['expense'],
+      orderBy: 'date DESC, id DESC',
+    );
+    return maps.map(TransactionRecord.fromMap).toList();
+  }
+
+  Future<List<TransactionRecord>> fetchReimbursedRecords() async {
+    final db = await database;
+    final maps = await db.query(
+      _tableName,
+      where: 'reimbursement_id IS NOT NULL',
+      orderBy: 'date DESC, id DESC',
+    );
+    return maps.map(TransactionRecord.fromMap).toList();
+  }
+
+  Future<List<TransactionRecord>> fetchAllExpenseRecords() async {
+    final db = await database;
+    final maps = await db.query(
+      _tableName,
+      where: 'type = ?',
+      whereArgs: ['expense'],
+      orderBy: 'date DESC, id DESC',
+    );
+    return maps.map(TransactionRecord.fromMap).toList();
+  }
+
+  Future<List<TransactionRecord>> fetchRecordsByIds(List<int> ids) async {
+    if (ids.isEmpty) {
+      return [];
+    }
+    final db = await database;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    final maps = await db.query(
+      _tableName,
+      where: 'id IN ($placeholders)',
+      whereArgs: ids,
+      orderBy: 'date DESC, id DESC',
+    );
+    return maps.map(TransactionRecord.fromMap).toList();
+  }
+
+  Future<void> clearAllRecords() async {
+    final db = await database;
+    await db.delete(_inventoryTableName);
+    await db.delete(_reimbursementTableName);
+    await db.delete(_tableName);
+  }
+
+  Future<String> backup() async {
+    final dbPath = await _dbFilePath();
+    final dir = await getApplicationDocumentsDirectory();
+    final backupDir = Directory(p.join(dir.path, 'backups'));
+    await backupDir.create(recursive: true);
+    final timestamp = DateTime.now().toIso8601String().replaceAll(':', '');
+    final fileName = 'finflow_backup_$timestamp.db';
+    final backupPath = p.join(backupDir.path, fileName);
+    await File(dbPath).copy(backupPath);
+    return backupPath;
+  }
+
+  Future<List<File>> getBackups() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final backupDir = Directory(p.join(dir.path, 'backups'));
+    if (!await backupDir.exists()) {
+      return [];
+    }
+    final files = backupDir
+        .listSync()
+        .whereType<File>()
+        .toList()
+      ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+    return files;
+  }
+
+  Future<void> restore(String path) async {
+    final dbPath = await _dbFilePath();
+    await _database?.close();
+    _database = null;
+    await File(path).copy(dbPath);
+    _database = await _initDatabase();
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'material_inventory_page.dart';
 import 'base_materials_page.dart';
+import 'reimbursement_page.dart';
 
 // 扩展功能入口页
 class ExtensionMenuPage extends StatelessWidget {
@@ -23,6 +24,12 @@ class ExtensionMenuPage extends StatelessWidget {
         icon: Icons.warehouse_outlined,
         builder: (context) => const MaterialInventoryPage(),
       ),
+      ExtensionMenuItem(
+        title: '报销管理',
+        subtitle: '管理报销单据',
+        icon: Icons.receipt_long_outlined,
+        builder: (context) => const ReimbursementPage(),
+      ),
     ];
 
     return Scaffold(
@@ -30,15 +37,10 @@ class ExtensionMenuPage extends StatelessWidget {
         title: const Text('扩展功能'),
       ),
       body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: GridView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: ListView.separated(
           itemCount: items.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 1.1,
-          ),
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
           itemBuilder: (context, index) {
             final item = items[index];
             return ExtensionMenuCard(item: item);
@@ -74,7 +76,7 @@ class ExtensionMenuCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return InkWell(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(12),
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(builder: item.builder),
@@ -83,45 +85,55 @@ class ExtensionMenuCard extends StatelessWidget {
       child: Ink(
         decoration: BoxDecoration(
           color: colorScheme.surface,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
               color: colorScheme.shadow.withValues(alpha: 0.06),
-              blurRadius: 12,
-              offset: const Offset(0, 6),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
         child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
             children: [
               Container(
-                width: 48,
-                height: 48,
+                width: 40,
+                height: 40,
                 decoration: BoxDecoration(
                   color: colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(
                   item.icon,
                   color: colorScheme.onPrimaryContainer,
-                  size: 26,
+                  size: 22,
                 ),
               ),
-              const SizedBox(height: 12),
-              Text(
-                item.title,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                item.subtitle,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      item.title,
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                textAlign: TextAlign.center,
+                    Text(
+                      item.subtitle,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: colorScheme.onSurfaceVariant,
+                size: 20,
               ),
             ],
           ),

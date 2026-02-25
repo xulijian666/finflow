@@ -68,20 +68,20 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   static const String _materialNoteSplitter = '｜';
 
   // 支出分类
-  static const List<String> _expenseCategories = [
-    '课程材料',
-    '人员劳务',
-    '餐饮与水',
-    '物流快递',
-    '活动差旅',
-    '其他',
+  static const List<_CategoryItem> _expenseCategories = [
+    _CategoryItem('课程材料', Icons.menu_book_rounded),
+    _CategoryItem('劳务费', Icons.engineering_rounded),
+    _CategoryItem('餐饮费', Icons.restaurant_rounded),
+    _CategoryItem('快递费', Icons.local_shipping_rounded),
+    _CategoryItem('办公费', Icons.article_rounded),
+    _CategoryItem('其他', Icons.grid_view_rounded),
   ];
 
   // 收入分类
-  static const List<String> _incomeCategories = [
-    '备用金',
-    '退款',
-    '其他',
+  static const List<_CategoryItem> _incomeCategories = [
+    _CategoryItem('备用金', Icons.account_balance_wallet_rounded),
+    _CategoryItem('退款', Icons.keyboard_return_rounded),
+    _CategoryItem('其他', Icons.grid_view_rounded),
   ];
 
   @override
@@ -97,8 +97,8 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     _date = record?.date ?? DateTime.now();
     _category = record?.category ??
         (_type == 'expense'
-            ? _expenseCategories.first
-            : _incomeCategories.first);
+            ? _expenseCategories.first.name
+            : _incomeCategories.first.name);
     _accountId = record?.accountId ?? widget.defaultAccountId;
     final noteText = record?.note ?? '';
     _noteController = TextEditingController(text: noteText);
@@ -891,8 +891,8 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                             final previousCategory = _category;
                             _type = value.first;
                             _category = _type == 'expense'
-                                ? _expenseCategories.first
-                                : _incomeCategories.first;
+                                ? _expenseCategories.first.name
+                                : _incomeCategories.first.name;
                             if (_category == '课程材料' &&
                                 _materialNameController.text.trim().isEmpty) {
                               _materialNameController.text =
@@ -926,14 +926,19 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                   spacing: 8,
                   runSpacing: 8,
                   children: categories.map((item) {
-                    final selected = item == _category;
+                    final selected = item.name == _category;
                     return ChoiceChip(
-                      label: Text(item),
+                      label: Text(item.name),
+                      avatar: Icon(
+                        item.icon,
+                        size: 18,
+                        color: selected ? null : const Color(0xFF666666),
+                      ),
                       selected: selected,
                       onSelected: (_) {
                         setState(() {
                           final previousCategory = _category;
-                          _category = item;
+                          _category = item.name;
                           if (_category == '课程材料' &&
                               _materialNameController.text.trim().isEmpty) {
                             _materialNameController.text =
@@ -1164,6 +1169,13 @@ class _NumberPad extends StatelessWidget {
       ],
     );
   }
+}
+
+class _CategoryItem {
+  final String name;
+  final IconData icon;
+
+  const _CategoryItem(this.name, this.icon);
 }
 
 class _PadRow extends StatelessWidget {

@@ -9,6 +9,7 @@ class TransactionRecord {
     required this.category,
     required this.date,
     this.note,
+    this.reimbursementId,
   });
 
   final int? id;
@@ -19,6 +20,7 @@ class TransactionRecord {
   final String category;
   final DateTime date;
   final String? note;
+  final int? reimbursementId;
 
   // 复制并替换指定字段
   TransactionRecord copyWith({
@@ -30,6 +32,7 @@ class TransactionRecord {
     String? category,
     DateTime? date,
     String? note,
+    int? reimbursementId,
   }) {
     return TransactionRecord(
       id: id ?? this.id,
@@ -40,6 +43,7 @@ class TransactionRecord {
       category: category ?? this.category,
       date: date ?? this.date,
       note: note ?? this.note,
+      reimbursementId: reimbursementId ?? this.reimbursementId,
     );
   }
 
@@ -54,6 +58,7 @@ class TransactionRecord {
       'category': category,
       'date': date.toIso8601String(),
       'note': note,
+      'reimbursement_id': reimbursementId,
     };
   }
 
@@ -68,6 +73,7 @@ class TransactionRecord {
       category: map['category'] as String,
       date: DateTime.parse(map['date'] as String),
       note: map['note'] as String?,
+      reimbursementId: map['reimbursement_id'] as int?,
     );
   }
 }
