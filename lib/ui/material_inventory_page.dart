@@ -58,9 +58,9 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
 
   Future<void> _exportInventory() async {
     if (_inventoryList.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('没有可导出的数据')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('没有可导出的数据')));
       return;
     }
 
@@ -73,15 +73,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
       final sheet = excelFile['Sheet1'];
 
       // 表头
-      sheet.appendRow([
-        '材料名称',
-        '单位',
-        '已购数量',
-        '出库数量',
-        '剩余数量',
-        '总金额',
-        '单价',
-      ]);
+      sheet.appendRow(['材料名称', '单位', '已购数量', '出库数量', '剩余数量', '总金额', '单价']);
 
       for (final item in _inventoryList) {
         final unitPrice = item.purchasedQuantity != 0
@@ -98,21 +90,45 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
         ]);
       }
 
-      // 保存文件
-      final directory = await getApplicationDocumentsDirectory();
-      final filePath = p.join(directory.path, '库存汇总_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx');
-      final file = File(filePath);
-      await file.writeAsBytes(excelFile.encode()!);
+      final bytes = excelFile.encode()!;
+      if (Platform.isWindows) {
+        final fileName =
+            '库存汇总_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
+        final outputFile = await FilePicker.platform.saveFile(
+          dialogTitle: '请选择保存位置',
+          fileName: fileName,
+          allowedExtensions: ['xlsx'],
+          type: FileType.custom,
+        );
 
-      // 分享文件
-      await Share.shareXFiles([XFile(filePath)], text: '库存汇总');
+        if (outputFile != null) {
+          final file = File(outputFile);
+          await file.writeAsBytes(bytes);
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('导出成功')));
+          }
+        }
+      } else {
+        // 保存文件
+        final directory = await getApplicationDocumentsDirectory();
+        final filePath = p.join(
+          directory.path,
+          '库存汇总_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx',
+        );
+        final file = File(filePath);
+        await file.writeAsBytes(bytes);
 
+        // 分享文件
+        await Share.shareXFiles([XFile(filePath)], text: '库存汇总');
+      }
     } catch (e) {
       debugPrint('导出失败: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('导出失败，请重试')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('导出失败，请重试')));
       }
     } finally {
       if (mounted) {
@@ -135,12 +151,32 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
       for (final item in materials) {
         sheet.appendRow([item.name, '', '', '']);
       }
-      final directory = await getApplicationDocumentsDirectory();
-      final filePath =
-          p.join(directory.path, '批量出库模板_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx');
-      final file = File(filePath);
-      await file.writeAsBytes(workbook.encode()!);
-      await Share.shareXFiles([XFile(filePath)], text: '批量出库模板');
+      final bytes = workbook.encode()!;
+      if (Platform.isWindows) {
+        final fileName =
+            '批量出库模板_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
+        final outputFile = await FilePicker.platform.saveFile(
+          dialogTitle: '请选择保存位置',
+          fileName: fileName,
+          allowedExtensions: ['xlsx'],
+          type: FileType.custom,
+        );
+
+        if (outputFile != null) {
+          final file = File(outputFile);
+          await file.writeAsBytes(bytes);
+          _showMessage('导出成功');
+        }
+      } else {
+        final directory = await getApplicationDocumentsDirectory();
+        final filePath = p.join(
+          directory.path,
+          '批量出库模板_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx',
+        );
+        final file = File(filePath);
+        await file.writeAsBytes(bytes);
+        await Share.shareXFiles([XFile(filePath)], text: '批量出库模板');
+      }
     } catch (_) {
       _showMessage('模板导出失败，请重试');
     } finally {
@@ -222,7 +258,10 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               decoration: InputDecoration(
                 hintText: '搜索材料名称',
                 hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
-                prefixIcon: Icon(Icons.search, color: Colors.white.withOpacity(0.5)),
+                prefixIcon: Icon(
+                  Icons.search,
+                  color: Colors.white.withOpacity(0.5),
+                ),
                 filled: true,
                 fillColor: const Color(0xFF2B2B2B),
                 border: OutlineInputBorder(
@@ -244,38 +283,53 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                   width: 40,
                   child: Text(
                     '序号',
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
-                  flex: 4,
+                  flex: 5,
                   child: Text(
                     '材料名称',
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
-                  flex: 3,
+                  flex: 2,
                   child: Text(
-                    '已购数量',
+                    '已购数',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
-                  flex: 3,
+                  flex: 2,
                   child: Text(
-                    '出库数量',
+                    '出库数',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
-                  flex: 3,
+                  flex: 2,
                   child: Text(
-                    '剩余数量',
+                    '剩余数',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
@@ -283,15 +337,21 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                   child: Text(
                     '总金额',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
-                  flex: 3,
+                  flex: 2,
                   child: Text(
                     '单价',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 56),
@@ -302,21 +362,25 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _inventoryList.isEmpty
-                    ? Center(
-                        child: Text(
-                          '暂无库存记录',
-                          style: TextStyle(color: Colors.white.withOpacity(0.5)),
-                        ),
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        itemCount: _inventoryList.length,
-                        separatorBuilder: (context, index) => const Divider(color: Color(0xFF333333), height: 1),
-                        itemBuilder: (context, index) {
-                          final item = _inventoryList[index];
-                          return _buildInventoryItem(index + 1, item);
-                        },
-                      ),
+                ? Center(
+                    child: Text(
+                      '暂无库存记录',
+                      style: TextStyle(color: Colors.white.withOpacity(0.5)),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    itemCount: _inventoryList.length,
+                    separatorBuilder: (context, index) =>
+                        const Divider(color: Color(0xFF333333), height: 1),
+                    itemBuilder: (context, index) {
+                      final item = _inventoryList[index];
+                      return _buildInventoryItem(index + 1, item);
+                    },
+                  ),
           ),
         ],
       ),
@@ -328,7 +392,8 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => InventoryDetailsPage(materialName: item.materialName),
+            builder: (context) =>
+                InventoryDetailsPage(materialName: item.materialName),
           ),
         );
       },
@@ -344,7 +409,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               ),
             ),
             Expanded(
-              flex: 4,
+              flex: 5,
               child: Text(
                 item.materialName,
                 style: const TextStyle(
@@ -355,7 +420,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               ),
             ),
             Expanded(
-              flex: 3,
+              flex: 2,
               child: _buildQuantityCell(
                 item.purchasedQuantity,
                 item.unit,
@@ -363,7 +428,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               ),
             ),
             Expanded(
-              flex: 3,
+              flex: 2,
               child: _buildQuantityCell(
                 item.outQuantity,
                 item.unit,
@@ -371,7 +436,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               ),
             ),
             Expanded(
-              flex: 3,
+              flex: 2,
               child: _buildQuantityCell(
                 item.remainingQuantity,
                 item.unit,
@@ -393,17 +458,14 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               ),
             ),
             Expanded(
-              flex: 3,
+              flex: 2,
               child: Text(
                 (item.purchasedQuantity == 0
                         ? 0
                         : item.totalAmount / item.purchasedQuantity)
                     .toStringAsFixed(2),
                 textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 14),
               ),
             ),
             const SizedBox(width: 8),
@@ -416,20 +478,37 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               ),
               child: const Text('出库'),
             ),
-            Icon(Icons.chevron_right, color: Colors.white.withOpacity(0.3), size: 16),
+            Icon(
+              Icons.chevron_right,
+              color: Colors.white.withOpacity(0.3),
+              size: 16,
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildQuantityCell(double value, String? unit,
-      {Color? color, bool bold = false}) {
+  Widget _buildQuantityCell(
+    double value,
+    String? unit, {
+    Color? color,
+    bool bold = false,
+  }) {
+    String text;
+    if (value % 1 == 0) {
+      text = value.toInt().toString();
+    } else {
+      text = value
+          .toStringAsFixed(2)
+          .replaceAll(RegExp(r"0*$"), "")
+          .replaceAll(RegExp(r"\.$"), "");
+    }
     return Row(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
         Text(
-          value.toStringAsFixed(2),
+          text,
           style: TextStyle(
             color: color ?? Colors.white,
             fontSize: 14,
@@ -513,10 +592,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
         });
       }
       if (missingNames.isNotEmpty) {
-        await _showBlockDialog(
-          '导入失败',
-          '以下材料不在基础材料中：${missingNames.join('、')}',
-        );
+        await _showBlockDialog('导入失败', '以下材料不在基础材料中：${missingNames.join('、')}');
         return;
       }
       if (detailList.isEmpty) {
@@ -525,7 +601,8 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
       }
       final summaryList = await RecordDatabase.instance.fetchInventorySummary();
       final remainingMap = {
-        for (final item in summaryList) item.materialName: item.remainingQuantity,
+        for (final item in summaryList)
+          item.materialName: item.remainingQuantity,
       };
       final outByName = <String, double>{};
       for (final detail in detailList) {
@@ -654,9 +731,10 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _showBlockDialog(String title, String message) async {
@@ -738,17 +816,23 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                   const SizedBox(height: 12),
                   Text(
                     item.materialName,
-                    style:
-                        TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 14),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.8),
+                      fontSize: 14,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: quantityController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: '出库数量',
-                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                      hintStyle: TextStyle(
+                        color: Colors.white.withOpacity(0.5),
+                      ),
                       filled: true,
                       fillColor: const Color(0xFF2B2B2B),
                       border: OutlineInputBorder(
@@ -763,7 +847,9 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: '出库备注（可选）',
-                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                      hintStyle: TextStyle(
+                        color: Colors.white.withOpacity(0.5),
+                      ),
                       filled: true,
                       fillColor: const Color(0xFF2B2B2B),
                       border: OutlineInputBorder(
@@ -778,7 +864,9 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                       Expanded(
                         child: Text(
                           DateFormat('yyyy-MM-dd').format(selectedDate),
-                          style: TextStyle(color: Colors.white.withOpacity(0.7)),
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.7),
+                          ),
                         ),
                       ),
                       TextButton(
@@ -812,8 +900,9 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                       Expanded(
                         child: FilledButton(
                           onPressed: () async {
-                            final quantity =
-                                double.tryParse(quantityController.text.trim());
+                            final quantity = double.tryParse(
+                              quantityController.text.trim(),
+                            );
                             if (quantity == null || quantity <= 0) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('请输入有效的出库数量')),
@@ -822,11 +911,13 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                             }
                             // 单笔出库库存不足时给出确认提示
                             if (item.remainingQuantity < quantity) {
-                              final unitText = item.unit == null ? '' : item.unit!;
+                              final unitText = item.unit == null
+                                  ? ''
+                                  : item.unit!;
                               final confirmed = await _showConfirmDialog(
                                 '库存不足',
                                 '${item.materialName}：现有${item.remainingQuantity.toStringAsFixed(2)}$unitText，'
-                                '需出库${quantity.toStringAsFixed(2)}$unitText\n库存不足，是否仍然出库？',
+                                    '需出库${quantity.toStringAsFixed(2)}$unitText\n库存不足，是否仍然出库？',
                               );
                               if (!confirmed) {
                                 return;
@@ -886,7 +977,9 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
   Future<void> _loadDetails() async {
     setState(() => _isLoading = true);
     try {
-      final list = await RecordDatabase.instance.fetchInventoryDetails(widget.materialName);
+      final list = await RecordDatabase.instance.fetchInventoryDetails(
+        widget.materialName,
+      );
       setState(() {
         _records = list;
         _isLoading = false;
@@ -917,7 +1010,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
       ),
       body: Column(
         children: [
-           // 明细表头
+          // 明细表头
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             color: const Color(0xFF2B2B2B),
@@ -927,7 +1020,10 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                   flex: 3,
                   child: Text(
                     '时间',
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
@@ -935,7 +1031,10 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                   child: Text(
                     '数量',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
@@ -943,7 +1042,10 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                   child: Text(
                     '金额',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
                 Expanded(
@@ -951,7 +1053,10 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                   child: Text(
                     '单价',
                     textAlign: TextAlign.right,
-                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ],
@@ -961,21 +1066,22 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _records.isEmpty
-                    ? Center(
-                        child: Text(
-                          '无记录',
-                          style: TextStyle(color: Colors.white.withOpacity(0.5)),
-                        ),
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _records.length,
-                        separatorBuilder: (context, index) => const Divider(color: Color(0xFF333333), height: 1),
-                        itemBuilder: (context, index) {
-                          final record = _records[index];
-                          return _buildDetailItem(record);
-                        },
-                      ),
+                ? Center(
+                    child: Text(
+                      '无记录',
+                      style: TextStyle(color: Colors.white.withOpacity(0.5)),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _records.length,
+                    separatorBuilder: (context, index) =>
+                        const Divider(color: Color(0xFF333333), height: 1),
+                    itemBuilder: (context, index) {
+                      final record = _records[index];
+                      return _buildDetailItem(record);
+                    },
+                  ),
           ),
         ],
       ),
@@ -987,14 +1093,17 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
     final dateStr = DateFormat('yyyy-MM-dd HH:mm').format(date);
     final isOutbound = record.isOutbound;
     final amount = record.amount;
-    final unitPrice =
-        record.quantity != 0 && amount != null ? amount / record.quantity : null;
+    final unitPrice = record.quantity != 0 && amount != null
+        ? amount / record.quantity
+        : null;
     final note = (record.note ?? '').trim();
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: InkWell(
-        onLongPress: record.isOutbound ? () => _showEditOutRecord(record) : null,
+        onLongPress: record.isOutbound
+            ? () => _showEditOutRecord(record)
+            : null,
         child: Row(
           children: [
             Expanded(
@@ -1082,8 +1191,9 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
   }
 
   Future<void> _showEditOutRecord(InventoryDetailRecord record) async {
-    final quantityController =
-        TextEditingController(text: record.quantity.toString());
+    final quantityController = TextEditingController(
+      text: record.quantity.toString(),
+    );
     final noteController = TextEditingController(text: record.note ?? '');
     DateTime selectedDate = DateTime.parse(record.createdAt);
     await showModalBottomSheet(
@@ -1114,11 +1224,15 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: quantityController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: '出库数量',
-                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                      hintStyle: TextStyle(
+                        color: Colors.white.withOpacity(0.5),
+                      ),
                       filled: true,
                       fillColor: const Color(0xFF2B2B2B),
                       border: OutlineInputBorder(
@@ -1133,7 +1247,9 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: '出库备注（可选）',
-                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                      hintStyle: TextStyle(
+                        color: Colors.white.withOpacity(0.5),
+                      ),
                       filled: true,
                       fillColor: const Color(0xFF2B2B2B),
                       border: OutlineInputBorder(
@@ -1148,7 +1264,9 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                       Expanded(
                         child: Text(
                           DateFormat('yyyy-MM-dd').format(selectedDate),
-                          style: TextStyle(color: Colors.white.withOpacity(0.7)),
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.7),
+                          ),
                         ),
                       ),
                       TextButton(
@@ -1182,7 +1300,9 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () async {
-                            await RecordDatabase.instance.deleteOutRecord(record.id);
+                            await RecordDatabase.instance.deleteOutRecord(
+                              record.id,
+                            );
                             if (mounted) {
                               Navigator.pop(context);
                               _loadDetails();
@@ -1195,8 +1315,9 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                       Expanded(
                         child: FilledButton(
                           onPressed: () async {
-                            final quantity =
-                                double.tryParse(quantityController.text.trim());
+                            final quantity = double.tryParse(
+                              quantityController.text.trim(),
+                            );
                             if (quantity == null || quantity <= 0) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('请输入有效的出库数量')),

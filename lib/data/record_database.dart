@@ -181,6 +181,8 @@ class RecordDatabase {
     }
     final dbPath = await _dbFilePath();
     final exists = await File(dbPath).exists();
+
+    // 关键保护：只有当本地数据库不存在时才从资源复制，确保升级/重装应用（只要文件未被删除）不会覆盖用户现有数据
     if (!exists) {
       try {
         await _copyAssetDatabase(dbPath);
@@ -278,8 +280,18 @@ class RecordDatabase {
   Future<void> _upgradeDb(Database db, int oldVersion, int newVersion) async {
     // 统一走建表逻辑，确保新增表在旧库中创建
     await _createDb(db, newVersion);
-    await _ensureColumn(db, _tableName, 'bill_id', 'INTEGER NOT NULL DEFAULT 1');
-    await _ensureColumn(db, _tableName, 'account_id', 'INTEGER NOT NULL DEFAULT 1');
+    await _ensureColumn(
+      db,
+      _tableName,
+      'bill_id',
+      'INTEGER NOT NULL DEFAULT 1',
+    );
+    await _ensureColumn(
+      db,
+      _tableName,
+      'account_id',
+      'INTEGER NOT NULL DEFAULT 1',
+    );
     await _ensureColumn(db, _tableName, 'reimbursement_id', 'INTEGER');
   }
 
@@ -396,11 +408,7 @@ class RecordDatabase {
 
   Future<void> deleteBill(int billId) async {
     final db = await database;
-    await db.delete(
-      _billTableName,
-      where: 'id = ?',
-      whereArgs: [billId],
-    );
+    await db.delete(_billTableName, where: 'id = ?', whereArgs: [billId]);
   }
 
   Future<void> deleteBillWithRecords(int billId) async {
@@ -464,11 +472,7 @@ class RecordDatabase {
       where: 'account_id = ?',
       whereArgs: [accountId],
     );
-    await db.delete(
-      _accountTableName,
-      where: 'id = ?',
-      whereArgs: [accountId],
-    );
+    await db.delete(_accountTableName, where: 'id = ?', whereArgs: [accountId]);
   }
 
   Future<Map<int, double>> fetchAccountBalances() async {
@@ -481,7 +485,7 @@ class RecordDatabase {
     ''');
     return {
       for (final row in rows)
-        row['account_id'] as int: (row['balance'] as num?)?.toDouble() ?? 0
+        row['account_id'] as int: (row['balance'] as num?)?.toDouble() ?? 0,
     };
   }
 
@@ -493,7 +497,8 @@ class RecordDatabase {
     final like = '%$keyword%';
     final maps = await db.query(
       _tableName,
-      where: 'bill_id = ? AND (note LIKE ? OR category LIKE ? OR amount LIKE ?)',
+      where:
+          'bill_id = ? AND (note LIKE ? OR category LIKE ? OR amount LIKE ?)',
       whereArgs: [billId, like, like, like],
       orderBy: 'date DESC, id DESC',
     );
@@ -567,11 +572,7 @@ class RecordDatabase {
       where: 'record_id = ?',
       whereArgs: [id],
     );
-    await db.delete(
-      _tableName,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.delete(_tableName, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> insertRecords(List<TransactionRecord> records) async {
@@ -612,17 +613,14 @@ class RecordDatabase {
       args.add(accountId);
     }
     final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
-    final rows = await db.rawQuery(
-      '''
+    final rows = await db.rawQuery('''
       SELECT r.*, b.name AS book_name, a.name AS account_name
       FROM $_tableName r
       LEFT JOIN $_billTableName b ON r.bill_id = b.id
       LEFT JOIN $_accountTableName a ON r.account_id = a.id
       $whereSql
       ORDER BY r.date DESC, r.id DESC
-      ''',
-      args,
-    );
+      ''', args);
     return rows;
   }
 
@@ -680,11 +678,7 @@ class RecordDatabase {
 
   Future<void> deleteBaseMaterial(int id) async {
     final db = await database;
-    await db.delete(
-      _baseMaterialTableName,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.delete(_baseMaterialTableName, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<int> replaceBaseMaterials(List<BaseMaterial> materials) async {
@@ -768,10 +762,11 @@ class RecordDatabase {
       where.add('bm.name LIKE ?');
       args.add('%${keyword.trim()}%');
     }
-    where.add('(COALESCE(in_sum.purchased_quantity, 0) > 0 OR COALESCE(out_sum.out_quantity, 0) > 0)');
+    where.add(
+      '(COALESCE(in_sum.purchased_quantity, 0) > 0 OR COALESCE(out_sum.out_quantity, 0) > 0)',
+    );
     final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
-    final rows = await db.rawQuery(
-      '''
+    final rows = await db.rawQuery('''
       SELECT bm.name AS material_name,
              COALESCE(in_sum.unit, out_sum.unit, bm.unit) AS unit,
              COALESCE(in_sum.purchased_quantity, 0) AS purchased_quantity,
@@ -797,13 +792,13 @@ class RecordDatabase {
       ) out_sum ON out_sum.material_name = bm.name
       $whereSql
       ORDER BY remaining_quantity DESC
-      ''',
-      args,
-    );
+      ''', args);
     return rows.map(InventorySummary.fromMap).toList();
   }
 
-  Future<List<InventoryDetailRecord>> fetchInventoryDetails(String materialName) async {
+  Future<List<InventoryDetailRecord>> fetchInventoryDetails(
+    String materialName,
+  ) async {
     final db = await database;
     final rows = await db.rawQuery(
       '''
@@ -890,11 +885,7 @@ class RecordDatabase {
 
   Future<void> deleteOutRecord(int id) async {
     final db = await database;
-    await db.delete(
-      _inventoryOutTableName,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.delete(_inventoryOutTableName, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<int> createReimbursement(
@@ -1000,10 +991,7 @@ class RecordDatabase {
     if (!await backupDir.exists()) {
       return [];
     }
-    final files = backupDir
-        .listSync()
-        .whereType<File>()
-        .toList()
+    final files = backupDir.listSync().whereType<File>().toList()
       ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
     return files;
   }
