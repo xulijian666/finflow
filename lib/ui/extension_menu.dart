@@ -6,7 +6,9 @@ import 'reimbursement_page.dart';
 
 // 扩展功能入口页
 class ExtensionMenuPage extends StatelessWidget {
-  const ExtensionMenuPage({super.key});
+  const ExtensionMenuPage({super.key, this.onActionSelected});
+
+  final ValueChanged<String>? onActionSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -30,12 +32,16 @@ class ExtensionMenuPage extends StatelessWidget {
         icon: Icons.receipt_long_outlined,
         builder: (context) => const ReimbursementPage(),
       ),
+      const ExtensionMenuItem(
+        title: '账单数据导出',
+        subtitle: '筛选后导出账单',
+        icon: Icons.file_download_outlined,
+        action: 'bill_export',
+      ),
     ];
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('扩展功能'),
-      ),
+      appBar: AppBar(title: const Text('扩展功能')),
       body: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: ListView.separated(
@@ -43,7 +49,10 @@ class ExtensionMenuPage extends StatelessWidget {
           separatorBuilder: (_, __) => const SizedBox(height: 8),
           itemBuilder: (context, index) {
             final item = items[index];
-            return ExtensionMenuCard(item: item);
+            return ExtensionMenuCard(
+              item: item,
+              onActionSelected: onActionSelected,
+            );
           },
         ),
       ),
@@ -55,22 +64,28 @@ class ExtensionMenuItem {
   final String title;
   final String subtitle;
   final IconData icon;
-  final WidgetBuilder builder;
+  final WidgetBuilder? builder;
+  final String? action;
 
-  // 描述单个扩展功能卡片
-  ExtensionMenuItem({
+  const ExtensionMenuItem({
     required this.title,
     required this.subtitle,
     required this.icon,
-    required this.builder,
+    this.builder,
+    this.action,
   });
 }
 
 // 扩展入口卡片
 class ExtensionMenuCard extends StatelessWidget {
   final ExtensionMenuItem item;
+  final ValueChanged<String>? onActionSelected;
 
-  const ExtensionMenuCard({super.key, required this.item});
+  const ExtensionMenuCard({
+    super.key,
+    required this.item,
+    this.onActionSelected,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -78,9 +93,15 @@ class ExtensionMenuCard extends StatelessWidget {
     return InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: item.builder),
-        );
+        if (item.action != null) {
+          Navigator.of(context).pop(item.action);
+          onActionSelected?.call(item.action!);
+          return;
+        }
+        if (item.builder == null) {
+          return;
+        }
+        Navigator.of(context).push(MaterialPageRoute(builder: item.builder!));
       },
       child: Ink(
         decoration: BoxDecoration(
@@ -124,8 +145,8 @@ class ExtensionMenuCard extends StatelessWidget {
                     Text(
                       item.subtitle,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                          ),
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),

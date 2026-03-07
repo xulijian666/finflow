@@ -14,6 +14,8 @@ import '../data/transaction_record.dart';
 import 'extension_menu.dart';
 import 'record_form_sheet.dart';
 
+enum _RecordTimeFilterMode { all, month, year }
+
 // 首页：记账列表、管理入口与导入导出
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -22,12 +24,15 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
+class _HomePageState extends State<HomePage>
+    with SingleTickerProviderStateMixin {
   // 持久化键值
   static const String _prefKeyBillId = 'selected_bill_id';
   static const String _prefKeyAccountId = 'selected_account_id';
   static const String _prefKeyLongcatApiKey = 'longcat_api_key';
-  static const String _defaultLongcatApiKey = 'ak_1DQ2Mp2d77AD7nr5H840Y4xT2VD5D';
+  static const String _prefKeyRecordFilterMode = 'record_filter_mode';
+  static const String _defaultLongcatApiKey =
+      'ak_1DQ2Mp2d77AD7nr5H840Y4xT2VD5D';
 
   // 列表数据与账户余额
   List<TransactionRecord> _records = [];
@@ -54,6 +59,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   int? _editingBillId;
   int? _editingAccountId;
   String _longcatApiKey = _defaultLongcatApiKey;
+  _RecordTimeFilterMode _timeFilterMode = _RecordTimeFilterMode.all;
+  int _timeFilterYear = DateTime.now().year;
+  int _timeFilterMonth = DateTime.now().month;
   // UI 控制器
   late TabController _tabController;
   int _currentTabIndex = 0;
@@ -115,6 +123,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (billId == null) {
       return;
     }
+    final startDate = _activeStartDate();
+    final endDate = _activeEndDate();
     // 重置加载状态
     setState(() {
       _loading = true;
@@ -130,6 +140,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         final records = await RecordDatabase.instance.fetchRecordsByKeyword(
           billId: billId,
           keyword: keyword,
+          startDate: startDate,
+          endDate: endDate,
         );
         if (!mounted) {
           return;
@@ -165,12 +177,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       return;
     }
     // 分批获取最近有记录的日期
-    final beforeDate =
-        append && _loadedDateKeys.isNotEmpty ? _loadedDateKeys.last : null;
+    final beforeDate = append && _loadedDateKeys.isNotEmpty
+        ? _loadedDateKeys.last
+        : null;
     final dates = await RecordDatabase.instance.fetchRecentRecordDates(
       billId: billId,
       beforeDate: beforeDate,
       limit: limit,
+      startDate: _activeStartDate(),
+      endDate: _activeEndDate(),
     );
     if (!mounted) {
       return;
@@ -189,6 +204,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final records = await RecordDatabase.instance.fetchRecordsByDates(
       billId: billId,
       dateKeys: dates,
+      startDate: _activeStartDate(),
+      endDate: _activeEndDate(),
     );
     if (!mounted) {
       return;
@@ -274,6 +291,26 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _loadRecords();
   }
 
+  DateTime? _activeStartDate() {
+    if (_timeFilterMode == _RecordTimeFilterMode.month) {
+      return DateTime(_timeFilterYear, _timeFilterMonth, 1);
+    }
+    if (_timeFilterMode == _RecordTimeFilterMode.year) {
+      return DateTime(_timeFilterYear, 1, 1);
+    }
+    return null;
+  }
+
+  DateTime? _activeEndDate() {
+    if (_timeFilterMode == _RecordTimeFilterMode.month) {
+      return DateTime(_timeFilterYear, _timeFilterMonth + 1, 0);
+    }
+    if (_timeFilterMode == _RecordTimeFilterMode.year) {
+      return DateTime(_timeFilterYear, 12, 31);
+    }
+    return null;
+  }
+
   Future<void> _loadBills() async {
     // 切换账本列表时刷新选择状态
     setState(() {
@@ -290,8 +327,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               (bill) => bill.isDefault,
               orElse: () => bills.first,
             );
-      final nextBillId =
-          currentExists ? currentId : defaultBill?.id ?? fallbackId;
+      final nextBillId = currentExists
+          ? currentId
+          : defaultBill?.id ?? fallbackId;
       if (!mounted) {
         return;
       }
@@ -357,10 +395,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   Future<void> _openForm({TransactionRecord? record}) async {
     await showRecordFormSheet(
       context,
-      billId: record?.billId ??
+      billId:
+          record?.billId ??
           _currentBillId ??
           RecordDatabase.instance.defaultBillId,
-      defaultAccountId: record?.accountId ??
+      defaultAccountId:
+          record?.accountId ??
           _currentAccountId ??
           _defaultAccountId ??
           RecordDatabase.instance.defaultAccountId,
@@ -411,9 +451,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   // 切换当前账本并刷新记录
@@ -464,7 +504,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                     title: Text(
                       bill.name,
                       style: TextStyle(
-                        color: isSelected ? Theme.of(context).primaryColor : null,
+                        color: isSelected
+                            ? Theme.of(context).primaryColor
+                            : null,
                         fontWeight: isSelected ? FontWeight.bold : null,
                       ),
                     ),
@@ -484,6 +526,29 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
   }
 
+  Future<void> _openTimeFilterDialog() async {
+    final result = await showDialog<_TimeFilterSelection>(
+      context: context,
+      builder: (context) {
+        return _TimeFilterDialog(
+          mode: _timeFilterMode,
+          year: _timeFilterYear,
+          month: _timeFilterMonth,
+        );
+      },
+    );
+    if (result == null) {
+      return;
+    }
+    setState(() {
+      _timeFilterMode = result.mode;
+      _timeFilterYear = result.year;
+      _timeFilterMonth = result.month;
+    });
+    _saveRecordFilterMode(result.mode);
+    _loadRecords();
+  }
+
   Future<void> _createBill() async {
     // 新增账本对话框
     final controller = TextEditingController();
@@ -495,9 +560,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           content: TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(
-              hintText: '请输入账本名称',
-            ),
+            decoration: const InputDecoration(hintText: '请输入账本名称'),
           ),
           actions: [
             TextButton(
@@ -505,9 +568,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(context).pop(
-                controller.text.trim(),
-              ),
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
               child: const Text('保存'),
             ),
           ],
@@ -549,9 +611,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           content: TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(
-              hintText: '请输入账本名称',
-            ),
+            decoration: const InputDecoration(hintText: '请输入账本名称'),
           ),
           actions: [
             TextButton(
@@ -559,9 +619,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(context).pop(
-                controller.text.trim(),
-              ),
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
               child: const Text('保存'),
             ),
           ],
@@ -644,9 +703,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             content: TextField(
               controller: controller,
               autofocus: true,
-              decoration: const InputDecoration(
-                hintText: '请输入“确认删除”',
-              ),
+              decoration: const InputDecoration(hintText: '请输入“确认删除”'),
             ),
             actions: [
               TextButton(
@@ -654,9 +711,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 child: const Text('取消'),
               ),
               FilledButton(
-                onPressed: () => Navigator.of(context).pop(
-                  controller.text.trim(),
-                ),
+                onPressed: () =>
+                    Navigator.of(context).pop(controller.text.trim()),
                 child: const Text('删除'),
               ),
             ],
@@ -707,9 +763,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           content: TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(
-              hintText: '请输入账户名称',
-            ),
+            decoration: const InputDecoration(hintText: '请输入账户名称'),
           ),
           actions: [
             TextButton(
@@ -717,9 +771,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(context).pop(
-                controller.text.trim(),
-              ),
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
               child: const Text('保存'),
             ),
           ],
@@ -757,9 +810,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           content: TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(
-              hintText: '请输入账户名称',
-            ),
+            decoration: const InputDecoration(hintText: '请输入账户名称'),
           ),
           actions: [
             TextButton(
@@ -767,9 +818,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(context).pop(
-                controller.text.trim(),
-              ),
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
               child: const Text('保存'),
             ),
           ],
@@ -853,6 +903,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return '默认账本';
   }
 
+  String _currentFilterLabel() {
+    if (_timeFilterMode == _RecordTimeFilterMode.month) {
+      final month = _timeFilterMonth.toString().padLeft(2, '0');
+      return '按月 $_timeFilterYear-$month';
+    }
+    if (_timeFilterMode == _RecordTimeFilterMode.year) {
+      return '按年 $_timeFilterYear';
+    }
+    return '全部';
+  }
+
   Future<void> _loadPreferences() async {
     // 从本地偏好恢复选择状态
     try {
@@ -860,6 +921,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       final billId = prefs.getInt(_prefKeyBillId);
       final accountId = prefs.getInt(_prefKeyAccountId);
       final apiKey = prefs.getString(_prefKeyLongcatApiKey);
+      final filterMode = prefs.getString(_prefKeyRecordFilterMode) ?? 'all';
+      final now = DateTime.now();
+      final nextMode = switch (filterMode) {
+        'month' => _RecordTimeFilterMode.month,
+        'year' => _RecordTimeFilterMode.year,
+        _ => _RecordTimeFilterMode.all,
+      };
       if (mounted) {
         setState(() {
           if (billId != null) _currentBillId = billId;
@@ -869,6 +937,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           } else {
             _longcatApiKey = _defaultLongcatApiKey;
           }
+          _timeFilterMode = nextMode;
+          _timeFilterYear = now.year;
+          _timeFilterMonth = now.month;
         });
       }
     } catch (e) {
@@ -902,6 +973,20 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       await prefs.setString(_prefKeyLongcatApiKey, value);
     } catch (e) {
       debugPrint('保存模型密钥失败: $e');
+    }
+  }
+
+  Future<void> _saveRecordFilterMode(_RecordTimeFilterMode mode) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value = switch (mode) {
+        _RecordTimeFilterMode.month => 'month',
+        _RecordTimeFilterMode.year => 'year',
+        _RecordTimeFilterMode.all => 'all',
+      };
+      await prefs.setString(_prefKeyRecordFilterMode, value);
+    } catch (e) {
+      debugPrint('保存时间筛选失败: $e');
     }
   }
 
@@ -946,8 +1031,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (trimmed == null) {
       return;
     }
-    final nextValue =
-        trimmed.isEmpty ? _defaultLongcatApiKey : trimmed;
+    final nextValue = trimmed.isEmpty ? _defaultLongcatApiKey : trimmed;
     setState(() {
       _longcatApiKey = nextValue;
     });
@@ -1014,166 +1098,221 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         }
       },
       child: Scaffold(
-      appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('记账'),
-            const SizedBox(width: 12),
-            InkWell(
-              onTap: _showBillSelectionDialog,
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.secondaryContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        _currentBillName(),
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Theme.of(context).colorScheme.onSecondaryContainer,
-                            ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.arrow_drop_down,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.onSecondaryContainer,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: '记账'),
-            Tab(text: '管理'),
-          ],
-        ),
-        actions: [
-          IconButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const ExtensionMenuPage(),
-                ),
-              ).then((_) => _loadBaseMaterials());
-            },
-            icon: const Icon(Icons.apps),
-          ),
-        ],
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          Column(
+        appBar: AppBar(
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: TextField(
-                  controller: _searchController,
-                  onChanged: _onSearchChanged,
-                  decoration: InputDecoration(
-                    hintText: '搜索备注或分类',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _keyword.trim().isEmpty
-                        ? null
-                        : IconButton(
-                            onPressed: _clearSearch,
-                            icon: const Icon(Icons.close),
-                          ),
-                    filled: true,
-                    fillColor: const Color(0xFFF5F7F7),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
+              const Text('记账'),
+              const SizedBox(width: 12),
+              InkWell(
+                onTap: _showBillSelectionDialog,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          _currentBillName(),
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSecondaryContainer,
+                              ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.arrow_drop_down,
+                        size: 18,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSecondaryContainer,
+                      ),
+                    ],
                   ),
                 ),
               ),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: _loadRecords,
-                  child: ListView(
-                    controller: _recordScrollController,
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: _openTimeFilterDialog,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (_loading)
-                        const Center(child: CircularProgressIndicator())
-                      else if (_loadingError)
-                        _EmptyState(
-                          message: '加载失败，请下拉重试',
-                          onRetry: _loadRecords,
-                        )
-                      else if (_records.isEmpty)
-                        _EmptyState(
-                          message: '暂无记录，点 + 记一笔',
-                          onRetry: _loadRecords,
-                        )
-                      else
-                        ..._buildGroupedRecords(),
-                      if (_loadingMore)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 12),
-                          child: Center(child: CircularProgressIndicator()),
+                      Text(
+                        _currentFilterLabel(),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSecondaryContainer,
                         ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.arrow_drop_down,
+                        size: 18,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSecondaryContainer,
+                      ),
                     ],
                   ),
                 ),
               ),
             ],
           ),
-          _buildManagementTab(),
-        ],
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-      floatingActionButton: _currentTabIndex == 0
-          ? AnimatedOpacity(
-              duration: const Duration(milliseconds: 300),
-              opacity: _showFab ? 1.0 : 0.0,
-              child: IgnorePointer(
-                ignoring: !_showFab,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      FloatingActionButton(
-                        heroTag: 'scrollToTop',
-                        onPressed: () {
-                          _recordScrollController.animateTo(
-                            0,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeOut,
-                          );
-                        },
-                        backgroundColor: Theme.of(context).colorScheme.surface,
-                        foregroundColor: Theme.of(context).colorScheme.primary,
-                        child: const Icon(Icons.arrow_upward),
+          bottom: TabBar(
+            controller: _tabController,
+            tabs: const [
+              Tab(text: '记账'),
+              Tab(text: '设置'),
+            ],
+          ),
+          actions: [
+            IconButton(
+              onPressed: () {
+                Navigator.of(context)
+                    .push(
+                      MaterialPageRoute(
+                        builder: (context) => const ExtensionMenuPage(),
                       ),
-                      const Spacer(),
-                      FloatingActionButton.extended(
-                        heroTag: 'addRecord',
-                        onPressed: () => _openForm(),
-                        label: const Text('记一笔'),
-                        icon: const Icon(Icons.add),
+                    )
+                    .then((action) {
+                      _loadBaseMaterials();
+                      if (action == 'bill_export') {
+                        _openExportDialog();
+                      }
+                    });
+              },
+              icon: const Icon(Icons.apps),
+            ),
+          ],
+        ),
+        body: TabBarView(
+          controller: _tabController,
+          children: [
+            Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: _onSearchChanged,
+                    decoration: InputDecoration(
+                      hintText: '搜索备注或分类',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _keyword.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: _clearSearch,
+                              icon: const Icon(Icons.close),
+                            ),
+                      filled: true,
+                      fillColor: const Color(0xFFF5F7F7),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            )
-          : null,
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: _loadRecords,
+                    child: ListView(
+                      controller: _recordScrollController,
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
+                      children: [
+                        if (_loading)
+                          const Center(child: CircularProgressIndicator())
+                        else if (_loadingError)
+                          _EmptyState(
+                            message: '加载失败，请下拉重试',
+                            onRetry: _loadRecords,
+                          )
+                        else if (_records.isEmpty)
+                          _EmptyState(
+                            message: '暂无记录，点 + 记一笔',
+                            onRetry: _loadRecords,
+                          )
+                        else
+                          ..._buildGroupedRecords(),
+                        if (_loadingMore)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 12),
+                            child: Center(child: CircularProgressIndicator()),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            _buildManagementTab(),
+          ],
+        ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+        floatingActionButton: _currentTabIndex == 0
+            ? AnimatedOpacity(
+                duration: const Duration(milliseconds: 300),
+                opacity: _showFab ? 1.0 : 0.0,
+                child: IgnorePointer(
+                  ignoring: !_showFab,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        FloatingActionButton(
+                          heroTag: 'scrollToTop',
+                          onPressed: () {
+                            _recordScrollController.animateTo(
+                              0,
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeOut,
+                            );
+                          },
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.surface,
+                          foregroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          child: const Icon(Icons.arrow_upward),
+                        ),
+                        const Spacer(),
+                        FloatingActionButton.extended(
+                          heroTag: 'addRecord',
+                          onPressed: () => _openForm(),
+                          label: const Text('记一笔'),
+                          icon: const Icon(Icons.add),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            : null,
       ),
     );
   }
@@ -1203,10 +1342,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         ),
         const SizedBox(height: 8),
         if (_bills.isEmpty)
-          _EmptyState(
-            message: '暂无账本',
-            onRetry: _loadBills,
-          )
+          _EmptyState(message: '暂无账本', onRetry: _loadBills)
         else
           Card(
             elevation: 0,
@@ -1322,10 +1458,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         ),
         const SizedBox(height: 8),
         if (_accounts.isEmpty)
-          _EmptyState(
-            message: '暂无账户',
-            onRetry: _loadAccounts,
-          )
+          _EmptyState(message: '暂无账户', onRetry: _loadAccounts)
         else
           Card(
             elevation: 0,
@@ -1498,40 +1631,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           children: [
             Expanded(
               child: Text(
-                '账单数据导出',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            TextButton.icon(
-              onPressed: _openExportDialog,
-              icon: const Icon(Icons.file_download),
-              label: const Text('导出'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Card(
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(
-              '支持按开始日期、结束日期、账本与账户筛选，默认导出全部',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ),
-        const SizedBox(height: 24),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
                 '危险区域',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: const Color(0xFFB5473B),
-                    ),
+                  color: const Color(0xFFB5473B),
+                ),
               ),
             ),
           ],
@@ -1609,9 +1712,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 if (controller.text.trim() == '我确认要将数据清空') {
                   Navigator.of(context).pop(true);
                 } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('输入文本不匹配')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('输入文本不匹配')));
                 }
               },
               child: const Text('确认清空'),
@@ -1653,7 +1756,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // 3. 刷新界面
       _loadRecords();
       _loadAccounts(); // 余额会变动
-      
+
       _showMessage('数据已格式化，自动备份已创建');
     } catch (e) {
       if (!mounted) return;
@@ -1757,13 +1860,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                         try {
                           final timestamp = name.split('_')[2].split('.')[0];
                           if (timestamp.length >= 14) {
-                             final year = timestamp.substring(0, 4);
-                             final month = timestamp.substring(4, 6);
-                             final day = timestamp.substring(6, 8);
-                             final hour = timestamp.substring(9, 11);
-                             final minute = timestamp.substring(11, 13);
-                             final second = timestamp.substring(13, 15);
-                             displayTime = '$year-$month-$day $hour:$minute:$second';
+                            final year = timestamp.substring(0, 4);
+                            final month = timestamp.substring(4, 6);
+                            final day = timestamp.substring(6, 8);
+                            final hour = timestamp.substring(9, 11);
+                            final minute = timestamp.substring(11, 13);
+                            final second = timestamp.substring(13, 15);
+                            displayTime =
+                                '$year-$month-$day $hour:$minute:$second';
                           }
                         } catch (_) {}
 
@@ -1776,7 +1880,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                               IconButton(
+                              IconButton(
                                 icon: const Icon(Icons.share, size: 20),
                                 onPressed: () {
                                   SharePlus.instance.share(
@@ -1785,7 +1889,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                                 },
                               ),
                               IconButton(
-                                icon: const Icon(Icons.restore, color: Color(0xFFB5473B)),
+                                icon: const Icon(
+                                  Icons.restore,
+                                  color: Color(0xFFB5473B),
+                                ),
                                 onPressed: () {
                                   Navigator.pop(context);
                                   _confirmRestore(file.path);
@@ -1797,13 +1904,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                       },
                     ),
                   ),
-                  const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text(
-                      '注意：卸载 App 前请务必执行“导出”，否则数据将丢失！',
-                      style: TextStyle(color: Colors.red, fontSize: 12),
-                    ),
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text(
+                    '注意：卸载 App 前请务必执行“导出”，否则数据将丢失！',
+                    style: TextStyle(color: Colors.red, fontSize: 12),
                   ),
+                ),
                 const SizedBox(height: 16),
               ],
             );
@@ -1820,8 +1927,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (result != null && result.files.single.path != null) {
         final path = result.files.single.path!;
         if (!path.endsWith('.db')) {
-             _showMessage('请选择正确的 .db 备份文件');
-             return;
+          _showMessage('请选择正确的 .db 备份文件');
+          return;
         }
         await _confirmRestore(path);
       }
@@ -1900,9 +2007,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Column(
         children: [
           Padding(
@@ -1920,11 +2025,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           ),
           const Divider(height: 1),
           ...items.asMap().entries.map(
-                (entry) => _buildRecordItem(
-                  entry.value,
-                  showDivider: entry.key != items.length - 1,
-                ),
-              ),
+            (entry) => _buildRecordItem(
+              entry.value,
+              showDivider: entry.key != items.length - 1,
+            ),
+          ),
         ],
       ),
     );
@@ -1944,53 +2049,51 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     // 单条记录展示
     final isMarked = _isMaterialInBaseList(record);
     return InkWell(
-        onTap: () => _openForm(record: record),
-        onLongPress: () async {
-          final confirmed = await _confirmDelete(record);
-          if (confirmed) {
-            _deleteRecord(record);
-          }
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            border: showDivider
-                ? const Border(
-                    bottom: BorderSide(color: Color(0xFFE6E6E6)),
-                  )
-                : null,
-          ),
-          child: Row(
-            children: [
-              if (isMarked)
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: const Icon(
-                    Icons.verified,
-                    size: 16,
-                    color: Color(0xFF1B7F5A),
-                  ),
-                ),
-              Expanded(
-                child: Text(
-                  _buildRecordTitle(record),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              Text(
-                _formatAmount(record),
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: record.type == 'income'
-                      ? const Color(0xFF1B7F5A)
-                      : const Color(0xFFB5473B),
-                ),
-              ),
-            ],
-          ),
+      onTap: () => _openForm(record: record),
+      onLongPress: () async {
+        final confirmed = await _confirmDelete(record);
+        if (confirmed) {
+          _deleteRecord(record);
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          border: showDivider
+              ? const Border(bottom: BorderSide(color: Color(0xFFE6E6E6)))
+              : null,
         ),
-      );
+        child: Row(
+          children: [
+            if (isMarked)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: const Icon(
+                  Icons.verified,
+                  size: 16,
+                  color: Color(0xFF1B7F5A),
+                ),
+              ),
+            Expanded(
+              child: Text(
+                _buildRecordTitle(record),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text(
+              _formatAmount(record),
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: record.type == 'income'
+                    ? const Color(0xFF1B7F5A)
+                    : const Color(0xFFB5473B),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   String _buildRecordTitle(TransactionRecord record) {
@@ -2103,7 +2206,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             billId = b;
             accountId = a;
             debugPrint(
-                '导出参数已选择 start=$start end=$end billId=$billId accountId=$accountId');
+              '导出参数已选择 start=$start end=$end billId=$billId accountId=$accountId',
+            );
           },
         );
       },
@@ -2164,7 +2268,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       final r = rows[i];
       final rawDate = r['date'] as String?;
       final parsedDate = rawDate == null ? null : DateTime.tryParse(rawDate);
-      final date = parsedDate == null ? (rawDate ?? '') : _formatDate(parsedDate);
+      final date = parsedDate == null
+          ? (rawDate ?? '')
+          : _formatDate(parsedDate);
       final book = r['book_name'] as String? ?? '默认账本';
       final account = r['account_name'] as String? ?? '默认账户';
       final type = r['type'] as String? ?? '';
@@ -2228,9 +2334,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         mimeType:
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       );
-      await SharePlus.instance.share(
-        ShareParams(files: [file]),
-      );
+      await SharePlus.instance.share(ShareParams(files: [file]));
       debugPrint('Android 分享面板已唤起');
       return true;
     } catch (_) {
@@ -2247,13 +2351,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final hour = date.hour.toString().padLeft(2, '0');
     final minute = date.minute.toString().padLeft(2, '0');
     final second = date.second.toString().padLeft(2, '0');
-    return '$year$month$day' '_$hour$minute$second';
+    return '$year$month$day'
+        '_$hour$minute$second';
   }
 
   Future<int> _importFromXlsx(_ImportSelection selection) async {
     // 从 xlsx 解析并导入记账记录
     debugPrint(
-        '开始导入文件：${selection.fileName} billId=${selection.billId} accountId=${selection.accountId}');
+      '开始导入文件：${selection.fileName} billId=${selection.billId} accountId=${selection.accountId}',
+    );
     final workbook = excel.Excel.decodeBytes(selection.bytes);
     excel.Sheet? sheet = workbook.tables['Sheet1'];
     sheet ??= workbook.tables.isEmpty ? null : workbook.tables.values.first;
@@ -2389,7 +2495,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
     final quantity = splitIndex == -1
         ? ''
-        : trimmedNote.substring(splitIndex + _materialNoteSplitter.length).trim();
+        : trimmedNote
+              .substring(splitIndex + _materialNoteSplitter.length)
+              .trim();
     final unit = _baseMaterials[materialName] ?? '';
     return _ExportMaterialFields(
       name: materialName,
@@ -2397,7 +2505,6 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       unit: unit,
     );
   }
-
 }
 
 class _ExportMaterialFields {
@@ -2421,12 +2528,7 @@ class _ExportDialog extends StatefulWidget {
 
   final List<Bill> bills;
   final List<Account> accounts;
-  final void Function(
-    DateTime?,
-    DateTime?,
-    int?,
-    int?,
-  ) onChanged;
+  final void Function(DateTime?, DateTime?, int?, int?) onChanged;
 
   @override
   State<_ExportDialog> createState() => _ExportDialogState();
@@ -2452,18 +2554,18 @@ class _ExportDialogState extends State<_ExportDialog> {
                 Expanded(
                   child: OutlinedButton(
                     onPressed: () => _pickStartDate(context),
-                    child: Text(_startDate == null
-                        ? '开始日期'
-                        : _formatDate(_startDate!)),
+                    child: Text(
+                      _startDate == null ? '开始日期' : _formatDate(_startDate!),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton(
                     onPressed: () => _pickEndDate(context),
-                    child: Text(_endDate == null
-                        ? '结束日期'
-                        : _formatDate(_endDate!)),
+                    child: Text(
+                      _endDate == null ? '结束日期' : _formatDate(_endDate!),
+                    ),
                   ),
                 ),
               ],
@@ -2538,12 +2640,7 @@ class _ExportDialogState extends State<_ExportDialog> {
         ),
         FilledButton(
           onPressed: () {
-            widget.onChanged(
-              _startDate,
-              _endDate,
-              _billId,
-              _accountId,
-            );
+            widget.onChanged(_startDate, _endDate, _billId, _accountId);
             Navigator.of(context).pop(true);
           },
           child: const Text('导出'),
@@ -2593,6 +2690,214 @@ class _ExportDialogState extends State<_ExportDialog> {
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
     return '$year-$month-$day';
+  }
+}
+
+class _TimeFilterSelection {
+  const _TimeFilterSelection({
+    required this.mode,
+    required this.year,
+    required this.month,
+  });
+
+  final _RecordTimeFilterMode mode;
+  final int year;
+  final int month;
+}
+
+class _TimeFilterDialog extends StatefulWidget {
+  const _TimeFilterDialog({
+    required this.mode,
+    required this.year,
+    required this.month,
+  });
+
+  final _RecordTimeFilterMode mode;
+  final int year;
+  final int month;
+
+  @override
+  State<_TimeFilterDialog> createState() => _TimeFilterDialogState();
+}
+
+class _TimeFilterDialogState extends State<_TimeFilterDialog> {
+  late _RecordTimeFilterMode _mode;
+  late int _year;
+  late int _month;
+
+  @override
+  void initState() {
+    super.initState();
+    _mode = widget.mode;
+    _year = widget.year;
+    _month = widget.month;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final years = List.generate(16, (index) => now.year + 5 - index);
+    return AlertDialog(
+      title: const Text('筛选显示'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Text('显示方式'),
+                const Spacer(),
+                DropdownButton<_RecordTimeFilterMode>(
+                  value: _mode,
+                  items: const [
+                    DropdownMenuItem(
+                      value: _RecordTimeFilterMode.month,
+                      child: Text('按月'),
+                    ),
+                    DropdownMenuItem(
+                      value: _RecordTimeFilterMode.year,
+                      child: Text('按年'),
+                    ),
+                    DropdownMenuItem(
+                      value: _RecordTimeFilterMode.all,
+                      child: Text('全部'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _mode = value;
+                    });
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_mode == _RecordTimeFilterMode.all)
+              Text(
+                '在首页加载【当前账本】下所有时间范围内的数据',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+              ),
+            if (_mode == _RecordTimeFilterMode.month)
+              Row(
+                children: [
+                  Expanded(
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: '年份',
+                        border: OutlineInputBorder(),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<int>(
+                          value: years.contains(_year) ? _year : years.first,
+                          isExpanded: true,
+                          items: years
+                              .map(
+                                (year) => DropdownMenuItem<int>(
+                                  value: year,
+                                  child: Text('$year'),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) {
+                              return;
+                            }
+                            setState(() {
+                              _year = value;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: '月份',
+                        border: OutlineInputBorder(),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<int>(
+                          value: _month,
+                          isExpanded: true,
+                          items: List.generate(
+                            12,
+                            (index) => DropdownMenuItem<int>(
+                              value: index + 1,
+                              child: Text(
+                                '${(index + 1).toString().padLeft(2, '0')}',
+                              ),
+                            ),
+                          ),
+                          onChanged: (value) {
+                            if (value == null) {
+                              return;
+                            }
+                            setState(() {
+                              _month = value;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            if (_mode == _RecordTimeFilterMode.year)
+              InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: '年份',
+                  border: OutlineInputBorder(),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<int>(
+                    value: years.contains(_year) ? _year : years.first,
+                    isExpanded: true,
+                    items: years
+                        .map(
+                          (year) => DropdownMenuItem<int>(
+                            value: year,
+                            child: Text('$year'),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() {
+                        _year = value;
+                      });
+                    },
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            Navigator.of(context).pop(
+              _TimeFilterSelection(mode: _mode, year: _year, month: _month),
+            );
+          },
+          child: const Text('确定'),
+        ),
+      ],
+    );
   }
 }
 
@@ -2659,10 +2964,12 @@ class _ImportDialogState extends State<_ImportDialog> {
                   value: _billId,
                   isExpanded: true,
                   items: widget.bills
-                      .map((bill) => DropdownMenuItem<int>(
-                            value: bill.id!,
-                            child: Text(bill.name),
-                          ))
+                      .map(
+                        (bill) => DropdownMenuItem<int>(
+                          value: bill.id!,
+                          child: Text(bill.name),
+                        ),
+                      )
                       .toList(),
                   onChanged: (value) {
                     setState(() => _billId = value);
@@ -2681,10 +2988,12 @@ class _ImportDialogState extends State<_ImportDialog> {
                   value: _accountId,
                   isExpanded: true,
                   items: widget.accounts
-                      .map((a) => DropdownMenuItem<int>(
-                            value: a.id!,
-                            child: Text(a.name),
-                          ))
+                      .map(
+                        (a) => DropdownMenuItem<int>(
+                          value: a.id!,
+                          child: Text(a.name),
+                        ),
+                      )
                       .toList(),
                   onChanged: (value) {
                     setState(() => _accountId = value);
@@ -2757,10 +3066,7 @@ class _ImportDialogState extends State<_ImportDialog> {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({
-    required this.message,
-    required this.onRetry,
-  });
+  const _EmptyState({required this.message, required this.onRetry});
 
   final String message;
   final VoidCallback onRetry;
@@ -2772,15 +3078,9 @@ class _EmptyState extends StatelessWidget {
       alignment: Alignment.center,
       child: Column(
         children: [
-          Text(
-            message,
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
+          Text(message, style: Theme.of(context).textTheme.bodyLarge),
           const SizedBox(height: 12),
-          TextButton(
-            onPressed: onRetry,
-            child: const Text('刷新'),
-          ),
+          TextButton(onPressed: onRetry, child: const Text('刷新')),
         ],
       ),
     );

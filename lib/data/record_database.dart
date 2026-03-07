@@ -492,14 +492,28 @@ class RecordDatabase {
   Future<List<TransactionRecord>> fetchRecordsByKeyword({
     required int billId,
     required String keyword,
+    DateTime? startDate,
+    DateTime? endDate,
   }) async {
     final db = await database;
     final like = '%$keyword%';
+    final where = <String>[
+      'bill_id = ?',
+      '(note LIKE ? OR category LIKE ? OR amount LIKE ?)',
+    ];
+    final args = <Object?>[billId, like, like, like];
+    if (startDate != null) {
+      where.add('date(date) >= date(?)');
+      args.add(startDate.toIso8601String());
+    }
+    if (endDate != null) {
+      where.add('date(date) <= date(?)');
+      args.add(endDate.toIso8601String());
+    }
     final maps = await db.query(
       _tableName,
-      where:
-          'bill_id = ? AND (note LIKE ? OR category LIKE ? OR amount LIKE ?)',
-      whereArgs: [billId, like, like, like],
+      where: where.join(' AND '),
+      whereArgs: args,
       orderBy: 'date DESC, id DESC',
     );
     return maps.map(TransactionRecord.fromMap).toList();
@@ -509,6 +523,8 @@ class RecordDatabase {
     required int billId,
     String? beforeDate,
     required int limit,
+    DateTime? startDate,
+    DateTime? endDate,
   }) async {
     final db = await database;
     final where = <String>['bill_id = ?'];
@@ -516,6 +532,14 @@ class RecordDatabase {
     if (beforeDate != null && beforeDate.isNotEmpty) {
       where.add('date(date) < date(?)');
       args.add(beforeDate);
+    }
+    if (startDate != null) {
+      where.add('date(date) >= date(?)');
+      args.add(startDate.toIso8601String());
+    }
+    if (endDate != null) {
+      where.add('date(date) <= date(?)');
+      args.add(endDate.toIso8601String());
     }
     final rows = await db.query(
       _tableName,
@@ -532,20 +556,34 @@ class RecordDatabase {
   Future<List<TransactionRecord>> fetchRecordsByDates({
     required int billId,
     required List<String> dateKeys,
+    DateTime? startDate,
+    DateTime? endDate,
   }) async {
     if (dateKeys.isEmpty) {
       return [];
     }
     final db = await database;
     final placeholders = List.filled(dateKeys.length, '?').join(',');
+    final where = <String>[
+      'bill_id = ?',
+      'date(date) IN ($placeholders)',
+    ];
+    final args = <Object?>[billId, ...dateKeys];
+    if (startDate != null) {
+      where.add('date(date) >= date(?)');
+      args.add(startDate.toIso8601String());
+    }
+    if (endDate != null) {
+      where.add('date(date) <= date(?)');
+      args.add(endDate.toIso8601String());
+    }
     final maps = await db.rawQuery(
       '''
       SELECT * FROM $_tableName
-      WHERE bill_id = ?
-        AND date(date) IN ($placeholders)
+      WHERE ${where.join(' AND ')}
       ORDER BY date DESC, id DESC
       ''',
-      [billId, ...dateKeys],
+      args,
     );
     return maps.map(TransactionRecord.fromMap).toList();
   }
