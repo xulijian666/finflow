@@ -2152,6 +2152,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       '账目金额',
       '账目备注',
       '分类',
+      '材料名称',
+      '数量',
+      '单位',
     ];
     final workbook = excel.Excel.createExcel();
     final sheet = workbook['Sheet1'];
@@ -2168,6 +2171,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       final amount = (r['amount'] as num?)?.toDouble() ?? 0;
       final note = r['note'] as String? ?? '';
       final category = r['category'] as String? ?? '';
+      final material = _parseExportMaterialFields(
+        category: category,
+        note: note,
+      );
       sheet.appendRow([
         i + 1,
         date,
@@ -2177,6 +2184,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         amount,
         note,
         category,
+        material.name,
+        material.quantity,
+        material.unit,
       ]);
     }
     debugPrint('数据写入工作表完成，准备保存为文件');
@@ -2359,6 +2369,47 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return null;
   }
 
+  _ExportMaterialFields _parseExportMaterialFields({
+    required String category,
+    required String note,
+  }) {
+    if (category != '课程材料') {
+      return const _ExportMaterialFields();
+    }
+    final trimmedNote = note.trim();
+    if (trimmedNote.isEmpty) {
+      return const _ExportMaterialFields();
+    }
+    final splitIndex = trimmedNote.indexOf(_materialNoteSplitter);
+    final materialName = splitIndex == -1
+        ? trimmedNote
+        : trimmedNote.substring(0, splitIndex).trim();
+    if (materialName.isEmpty) {
+      return const _ExportMaterialFields();
+    }
+    final quantity = splitIndex == -1
+        ? ''
+        : trimmedNote.substring(splitIndex + _materialNoteSplitter.length).trim();
+    final unit = _baseMaterials[materialName] ?? '';
+    return _ExportMaterialFields(
+      name: materialName,
+      quantity: quantity,
+      unit: unit,
+    );
+  }
+
+}
+
+class _ExportMaterialFields {
+  const _ExportMaterialFields({
+    this.name = '',
+    this.quantity = '',
+    this.unit = '',
+  });
+
+  final String name;
+  final String quantity;
+  final String unit;
 }
 
 class _ExportDialog extends StatefulWidget {
