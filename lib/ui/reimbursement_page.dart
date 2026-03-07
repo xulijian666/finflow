@@ -26,14 +26,14 @@ class _ReimbursementPageState extends State<ReimbursementPage>
   List<TransactionRecord> _unreimbursedRecords = [];
   List<TransactionRecord> _reimbursedRecords = [];
   List<TransactionRecord> _allRecords = [];
-  
+
   // Selection
   final Set<int> _selectedRecordIds = {};
   // 记录每个分组是否展开
   final Map<String, bool> _monthExpandedMap = {};
   final Map<String, String> _baseMaterials = {};
   static const String _materialNoteSplitter = '｜';
-  
+
   bool _isLoading = true;
 
   @override
@@ -53,7 +53,8 @@ class _ReimbursementPageState extends State<ReimbursementPage>
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final unreimbursed = await RecordDatabase.instance.fetchUnreimbursedRecords();
+      final unreimbursed = await RecordDatabase.instance
+          .fetchUnreimbursedRecords();
       final reimbursed = await RecordDatabase.instance.fetchReimbursedRecords();
       final all = await RecordDatabase.instance.fetchAllExpenseRecords();
       final materials = await RecordDatabase.instance.fetchBaseMaterials();
@@ -107,7 +108,7 @@ class _ReimbursementPageState extends State<ReimbursementPage>
     final selectedRecords = _unreimbursedRecords
         .where((r) => _selectedRecordIds.contains(r.id))
         .toList();
-    
+
     final totalAmount = selectedRecords.fold(0.0, (sum, r) => sum + r.amount);
 
     showModalBottomSheet(
@@ -182,10 +183,7 @@ class _ReimbursementPageState extends State<ReimbursementPage>
                         _reimbursedRecords,
                         tabIndex: 1,
                       ), // TODO: Group by Reimbursement Bundle instead?
-                      _buildRecordList(
-                        _allRecords,
-                        tabIndex: 2,
-                      ),
+                      _buildRecordList(_allRecords, tabIndex: 2),
                     ],
                   ),
           ),
@@ -215,10 +213,11 @@ class _ReimbursementPageState extends State<ReimbursementPage>
                         ),
                         Text(
                           '¥ ${_calculateSelectedTotal().toStringAsFixed(2)}',
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            color: colorScheme.primary,
-                            fontWeight: FontWeight.bold,
-                          ),
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
+                                color: colorScheme.primary,
+                                fontWeight: FontWeight.bold,
+                              ),
                         ),
                       ],
                     ),
@@ -263,9 +262,7 @@ class _ReimbursementPageState extends State<ReimbursementPage>
     }
 
     final keys = grouped.keys.toList()
-      ..sort(
-        (a, b) => _monthKeyToDate(b).compareTo(_monthKeyToDate(a)),
-      );
+      ..sort((a, b) => _monthKeyToDate(b).compareTo(_monthKeyToDate(a)));
 
     return ListView.builder(
       itemCount: keys.length,
@@ -275,11 +272,12 @@ class _ReimbursementPageState extends State<ReimbursementPage>
         final monthRecords = grouped[monthKey]!;
         final totalAmount = monthRecords.fold(0.0, (sum, r) => sum + r.amount);
         final isExpanded = _isMonthExpanded(tabIndex, monthKey);
-        
+
         // Check if all selected in this month
-        final allSelected = isSelectionEnabled && 
+        final allSelected =
+            isSelectionEnabled &&
             monthRecords.every((r) => _selectedRecordIds.contains(r.id));
-        
+
         // Check if some selected (for visual feedback, though Checkbox usually only supports tristate or bool)
         // We'll just use simple logic: if all selected -> true, else false.
 
@@ -291,7 +289,10 @@ class _ReimbursementPageState extends State<ReimbursementPage>
                 _toggleMonthExpanded(tabIndex, monthKey);
               },
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 child: Row(
                   children: [
                     if (isSelectionEnabled)
@@ -353,8 +354,10 @@ class _ReimbursementPageState extends State<ReimbursementPage>
                       ),
                     ),
                     child: ListTile(
-                      contentPadding:
-                          const EdgeInsets.only(left: 16, right: 16),
+                      contentPadding: const EdgeInsets.only(
+                        left: 16,
+                        right: 16,
+                      ),
                       leading: isSelectionEnabled
                           ? Checkbox(
                               value: isSelected,
@@ -368,9 +371,8 @@ class _ReimbursementPageState extends State<ReimbursementPage>
                           Text(DateFormat('MM-dd').format(record.date)),
                           Text(
                             _buildRecordDetail(record),
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: colorScheme.onSurfaceVariant),
                           ),
                         ],
                       ),
@@ -418,8 +420,9 @@ class _ReimbursementPageState extends State<ReimbursementPage>
       }
       final index = note.indexOf(_materialNoteSplitter);
       final name = index == -1 ? note : note.substring(0, index).trim();
-      final quantity =
-          index == -1 ? '' : note.substring(index + _materialNoteSplitter.length).trim();
+      final quantity = index == -1
+          ? ''
+          : note.substring(index + _materialNoteSplitter.length).trim();
       if (name.isEmpty) {
         return '材料：未填写';
       }
@@ -452,20 +455,21 @@ class _ReimbursementBottomSheet extends StatefulWidget {
   });
 
   @override
-  State<_ReimbursementBottomSheet> createState() => _ReimbursementBottomSheetState();
+  State<_ReimbursementBottomSheet> createState() =>
+      _ReimbursementBottomSheetState();
 }
 
 class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
   late DateTime _selectedDate;
   final TextEditingController _noteController = TextEditingController();
   static const String _materialNoteSplitter = '｜';
-  
+
   @override
   void initState() {
     super.initState();
     _selectedDate = DateTime.now();
   }
-  
+
   @override
   void dispose() {
     _noteController.dispose();
@@ -481,11 +485,14 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
         createdAt: DateTime.now(),
       );
 
-      await RecordDatabase.instance
-          .createReimbursement(reimbursement, widget.recordIds);
+      await RecordDatabase.instance.createReimbursement(
+        reimbursement,
+        widget.recordIds,
+      );
 
-      final records =
-          await RecordDatabase.instance.fetchRecordsByIds(widget.recordIds);
+      final records = await RecordDatabase.instance.fetchRecordsByIds(
+        widget.recordIds,
+      );
       await _exportAndShare(records);
 
       if (mounted) {
@@ -494,9 +501,9 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
     } catch (e) {
       debugPrint('Error creating reimbursement: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('报销失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('报销失败: $e')));
       }
     }
   }
@@ -510,40 +517,60 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
           mimeType:
               'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         );
-        await SharePlus.instance.share(
-          ShareParams(files: [file]),
-        );
+        await SharePlus.instance.share(ShareParams(files: [file]));
         return;
       }
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已导出到 $filePath')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已导出到 $filePath')));
     } catch (e) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('导出失败，请重试')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('导出失败，请重试')));
     }
   }
 
   Future<String> _saveAsXlsx(List<TransactionRecord> records) async {
-    final headers = ['序号', '日期', '分类', '金额', '明细'];
+    final headers = [
+      '序号',
+      '日期',
+      '收支类型',
+      '账目金额',
+      '账目备注',
+      '分类',
+      '材料名称',
+      '数量',
+      '单位',
+    ];
+    final expenseRecords = records
+        .where((record) => record.type == 'expense')
+        .toList();
     final workbook = excel.Excel.createExcel();
     final sheet = workbook['Sheet1'];
     sheet.appendRow(headers);
-    for (var i = 0; i < records.length; i++) {
-      final record = records[i];
+    for (var i = 0; i < expenseRecords.length; i++) {
+      final record = expenseRecords[i];
+      final note = (record.note ?? '').trim();
+      final material = _parseExportMaterialFields(
+        category: record.category,
+        note: note,
+      );
       sheet.appendRow([
         i + 1,
         DateFormat('yyyy-MM-dd').format(record.date),
-        record.category,
+        '支出',
         record.amount,
-        _buildRecordDetail(record),
+        note,
+        record.category,
+        material.name,
+        material.quantity,
+        material.unit,
       ]);
     }
     final directory = await _exportDirectory();
@@ -564,30 +591,35 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
     return getApplicationDocumentsDirectory();
   }
 
-  String _buildRecordDetail(TransactionRecord record) {
-    if (record.category == '课程材料') {
-      final note = (record.note ?? '').trim();
-      if (note.isEmpty) {
-        return '材料：未填写';
-      }
-      final parts = note.split(_materialNoteSplitter);
-      final name = parts.isNotEmpty ? parts[0].trim() : '';
-      if (name.isEmpty) {
-        return '材料：未填写';
-      }
-      final quantity = parts.length > 1 ? parts[1].trim() : '';
-      final unit = widget.baseMaterials[name];
-      if (quantity.isEmpty) {
-        return unit == null || unit.isEmpty ? '材料：$name' : '材料：$name $unit';
-      }
-      final unitText = unit == null || unit.isEmpty ? '' : unit;
-      return '材料：$name  数量：$quantity$unitText';
+  _ExportMaterialFields _parseExportMaterialFields({
+    required String category,
+    required String note,
+  }) {
+    if (category != '课程材料') {
+      return const _ExportMaterialFields();
     }
-    final note = (record.note ?? '').trim();
-    if (note.isEmpty) {
-      return '备注：无';
+    final trimmedNote = note.trim();
+    if (trimmedNote.isEmpty) {
+      return const _ExportMaterialFields();
     }
-    return '备注：$note';
+    final splitIndex = trimmedNote.indexOf(_materialNoteSplitter);
+    final materialName = splitIndex == -1
+        ? trimmedNote
+        : trimmedNote.substring(0, splitIndex).trim();
+    if (materialName.isEmpty) {
+      return const _ExportMaterialFields();
+    }
+    final quantity = splitIndex == -1
+        ? ''
+        : trimmedNote
+              .substring(splitIndex + _materialNoteSplitter.length)
+              .trim();
+    final unit = widget.baseMaterials[materialName] ?? '';
+    return _ExportMaterialFields(
+      name: materialName,
+      quantity: quantity,
+      unit: unit,
+    );
   }
 
   String _formatDateTime(DateTime date) {
@@ -597,7 +629,8 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
     final hour = date.hour.toString().padLeft(2, '0');
     final minute = date.minute.toString().padLeft(2, '0');
     final second = date.second.toString().padLeft(2, '0');
-    return '$year$month$day' '_$hour$minute$second';
+    return '$year$month$day'
+        '_$hour$minute$second';
   }
 
   @override
@@ -674,4 +707,16 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
       ),
     );
   }
+}
+
+class _ExportMaterialFields {
+  const _ExportMaterialFields({
+    this.name = '',
+    this.quantity = '',
+    this.unit = '',
+  });
+
+  final String name;
+  final String quantity;
+  final String unit;
 }

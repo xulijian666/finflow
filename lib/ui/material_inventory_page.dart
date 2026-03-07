@@ -285,50 +285,50 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     '序号',
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                   ),
                 ),
                 Expanded(
                   flex: 5,
                   child: Text(
-                    '材料名称',
+                    '名称',
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                   ),
                 ),
                 Expanded(
                   flex: 2,
                   child: Text(
-                    '已购数',
+                    '已购',
                     textAlign: TextAlign.right,
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                   ),
                 ),
                 Expanded(
                   flex: 2,
                   child: Text(
-                    '出库数',
+                    '出库',
                     textAlign: TextAlign.right,
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                   ),
                 ),
                 Expanded(
                   flex: 2,
                   child: Text(
-                    '剩余数',
+                    '剩余',
                     textAlign: TextAlign.right,
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                   ),
                 ),
@@ -339,7 +339,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     textAlign: TextAlign.right,
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                   ),
                 ),
@@ -350,7 +350,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     textAlign: TextAlign.right,
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                   ),
                 ),
@@ -405,7 +405,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               width: 40,
               child: Text(
                 '$index',
-                style: const TextStyle(color: Colors.white, fontSize: 14),
+                style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
             ),
             Expanded(
@@ -414,7 +414,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                 item.materialName,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -423,23 +423,17 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               flex: 2,
               child: _buildQuantityCell(
                 item.purchasedQuantity,
-                item.unit,
                 color: Colors.white,
               ),
             ),
             Expanded(
               flex: 2,
-              child: _buildQuantityCell(
-                item.outQuantity,
-                item.unit,
-                color: Colors.white,
-              ),
+              child: _buildQuantityCell(item.outQuantity, color: Colors.white),
             ),
             Expanded(
               flex: 2,
               child: _buildQuantityCell(
                 item.remainingQuantity,
-                item.unit,
                 color: item.remainingQuantity < 0
                     ? const Color(0xFFE57373)
                     : Colors.white,
@@ -448,24 +442,21 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
             Expanded(
               flex: 3,
               child: Text(
-                item.totalAmount.toStringAsFixed(2),
+                _formatCompactNumber(item.totalAmount),
                 textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: Color(0xFF4CAF50),
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
             ),
             Expanded(
               flex: 2,
               child: Text(
-                (item.purchasedQuantity == 0
-                        ? 0
-                        : item.totalAmount / item.purchasedQuantity)
-                    .toStringAsFixed(2),
+                _formatCompactNumber(
+                  item.purchasedQuantity == 0
+                      ? 0
+                      : item.totalAmount / item.purchasedQuantity,
+                ),
                 textAlign: TextAlign.right,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
+                style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
             ),
             const SizedBox(width: 8),
@@ -476,12 +467,12 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(0, 28),
               ),
-              child: const Text('出库'),
+              child: const Text('出库', style: TextStyle(fontSize: 12)),
             ),
             Icon(
               Icons.chevron_right,
               color: Colors.white.withOpacity(0.3),
-              size: 16,
+              size: 14,
             ),
           ],
         ),
@@ -489,45 +480,28 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
     );
   }
 
-  Widget _buildQuantityCell(
-    double value,
-    String? unit, {
-    Color? color,
-    bool bold = false,
-  }) {
-    String text;
-    if (value % 1 == 0) {
-      text = value.toInt().toString();
-    } else {
-      text = value
-          .toStringAsFixed(2)
-          .replaceAll(RegExp(r"0*$"), "")
-          .replaceAll(RegExp(r"\.$"), "");
-    }
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        Text(
-          text,
-          style: TextStyle(
-            color: color ?? Colors.white,
-            fontSize: 14,
-            fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-          ),
+  Widget _buildQuantityCell(double value, {Color? color, bool bold = false}) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Text(
+        _formatCompactNumber(value),
+        style: TextStyle(
+          color: color ?? Colors.white,
+          fontSize: 12,
+          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
         ),
-        if (unit != null)
-          Padding(
-            padding: const EdgeInsets.only(left: 2),
-            child: Text(
-              unit,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.5),
-                fontSize: 12,
-              ),
-            ),
-          ),
-      ],
+      ),
     );
+  }
+
+  String _formatCompactNumber(double value) {
+    if (value % 1 == 0) {
+      return value.toInt().toString();
+    }
+    return value
+        .toStringAsFixed(6)
+        .replaceAll(RegExp(r"0*$"), "")
+        .replaceAll(RegExp(r"\.$"), "");
   }
 
   Future<void> _importOutStock() async {
