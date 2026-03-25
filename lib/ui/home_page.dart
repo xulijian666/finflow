@@ -1199,7 +1199,9 @@ class _HomePageState extends State<HomePage>
                       ),
                     )
                     .then((action) {
+                      // 扩展页返回后刷新材料与账单列表，确保材料改名后首页立即显示最新名称
                       _loadBaseMaterials();
+                      _loadRecords();
                       if (action == 'bill_export') {
                         _openExportDialog();
                       }
@@ -2277,9 +2279,11 @@ class _HomePageState extends State<HomePage>
       final amount = (r['amount'] as num?)?.toDouble() ?? 0;
       final note = r['note'] as String? ?? '';
       final category = r['category'] as String? ?? '';
+      final quantity = (r['quantity'] as num?)?.toDouble();
       final material = _parseExportMaterialFields(
         category: category,
         note: note,
+        recordQuantity: quantity,
       );
       sheet.appendRow([
         i + 1,
@@ -2385,6 +2389,7 @@ class _HomePageState extends State<HomePage>
       final amount = _doubleFromCell(row, 5);
       final noteText = _stringFromCell(_cellAt(row, 6));
       final categoryText = _stringFromCell(_cellAt(row, 7));
+      final quantity = _doubleFromCell(row, 9);
       final type = _normalizeType(typeText);
       if (date == null || amount == null || type == null) {
         debugPrint('跳过无效行：index=$i date=$date type=$typeText amount=$amount');
@@ -2399,6 +2404,7 @@ class _HomePageState extends State<HomePage>
           category: categoryText.isEmpty ? '未分类' : categoryText,
           date: date,
           note: noteText.isEmpty ? null : noteText,
+          quantity: quantity,
         ),
       );
     }
@@ -2478,22 +2484,24 @@ class _HomePageState extends State<HomePage>
   _ExportMaterialFields _parseExportMaterialFields({
     required String category,
     required String note,
+    required double? recordQuantity,
   }) {
+    final quantityText = _formatExportQuantity(recordQuantity);
     if (category != '课程材料') {
-      return const _ExportMaterialFields();
+      return _ExportMaterialFields(quantity: quantityText);
     }
     final trimmedNote = note.trim();
     if (trimmedNote.isEmpty) {
-      return const _ExportMaterialFields();
+      return _ExportMaterialFields(quantity: quantityText);
     }
     final splitIndex = trimmedNote.indexOf(_materialNoteSplitter);
     final materialName = splitIndex == -1
         ? trimmedNote
         : trimmedNote.substring(0, splitIndex).trim();
     if (materialName.isEmpty) {
-      return const _ExportMaterialFields();
+      return _ExportMaterialFields(quantity: quantityText);
     }
-    final quantity = splitIndex == -1
+    final parsedQuantity = splitIndex == -1
         ? ''
         : trimmedNote
               .substring(splitIndex + _materialNoteSplitter.length)
@@ -2501,9 +2509,17 @@ class _HomePageState extends State<HomePage>
     final unit = _baseMaterials[materialName] ?? '';
     return _ExportMaterialFields(
       name: materialName,
-      quantity: quantity,
+      quantity: quantityText.isEmpty ? parsedQuantity : quantityText,
       unit: unit,
     );
+  }
+
+  String _formatExportQuantity(double? quantity) {
+    if (quantity == null || quantity <= 0) {
+      return '';
+    }
+    final value = quantity.toStringAsFixed(6);
+    return value.replaceFirst(RegExp(r'\.?0+$'), '');
   }
 }
 

@@ -51,9 +51,18 @@
    ```bash
    flutter run -d windows
    ```
+
+   调试日志模式
+3. flutter run -d windows -v *>&1 | Tee-Object -FilePath .\windows_debug.log
+  
 3. 打包 apk
    ```bash
    flutter build apk --release -v
+   ```
+
+4. 打包 exe
+   ```bash
+   flutter build windows --release
    ```
 
 ## 项目结构

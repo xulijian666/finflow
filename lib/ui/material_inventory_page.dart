@@ -73,7 +73,16 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
       final sheet = excelFile['Sheet1'];
 
       // 表头
-      sheet.appendRow(['材料名称', '单位', '已购数量', '出库数量', '剩余数量', '总金额', '单价']);
+      sheet.appendRow([
+        '材料名称',
+        '单位',
+        '已购数量',
+        '初始化数量',
+        '出库数量',
+        '剩余数量',
+        '总金额',
+        '单价',
+      ]);
 
       for (final item in _inventoryList) {
         final unitPrice = item.purchasedQuantity != 0
@@ -83,6 +92,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
           item.materialName,
           item.unit ?? '',
           item.purchasedQuantity,
+          item.initializedQuantity,
           item.outQuantity,
           item.remainingQuantity,
           item.totalAmount,
@@ -1071,6 +1081,16 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
         ? amount / record.quantity
         : null;
     final note = (record.note ?? '').trim();
+    final recordTypeLabel = record.isInitialization
+        ? '初始化'
+        : isOutbound
+        ? '出库'
+        : '入库';
+    final notePrefix = record.isInitialization
+        ? '初始化备注'
+        : isOutbound
+        ? '出库备注'
+        : '入库备注';
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1092,10 +1112,21 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                       fontSize: 14,
                     ),
                   ),
+                  Text(
+                    recordTypeLabel,
+                    style: TextStyle(
+                      color: record.isInitialization
+                          ? const Color(0xFF64B5F6)
+                          : isOutbound
+                          ? const Color(0xFFE57373)
+                          : const Color(0xFF4CAF50),
+                      fontSize: 12,
+                    ),
+                  ),
                   // 出入库备注展示
                   if (note.isNotEmpty)
                     Text(
-                      '${isOutbound ? '出库' : '入库'}备注：$note',
+                      '$notePrefix：$note',
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.5),
                         fontSize: 12,

@@ -9,6 +9,7 @@ class TransactionRecord {
     required this.category,
     required this.date,
     this.note,
+    this.quantity,
     this.reimbursementId,
   });
 
@@ -20,6 +21,7 @@ class TransactionRecord {
   final String category;
   final DateTime date;
   final String? note;
+  final double? quantity;
   final int? reimbursementId;
 
   // 复制并替换指定字段
@@ -32,6 +34,7 @@ class TransactionRecord {
     String? category,
     DateTime? date,
     String? note,
+    double? quantity,
     int? reimbursementId,
   }) {
     return TransactionRecord(
@@ -43,6 +46,7 @@ class TransactionRecord {
       category: category ?? this.category,
       date: date ?? this.date,
       note: note ?? this.note,
+      quantity: quantity ?? this.quantity,
       reimbursementId: reimbursementId ?? this.reimbursementId,
     );
   }
@@ -58,6 +62,7 @@ class TransactionRecord {
       'category': category,
       'date': date.toIso8601String(),
       'note': note,
+      'quantity': quantity,
       'reimbursement_id': reimbursementId,
     };
   }
@@ -73,6 +78,7 @@ class TransactionRecord {
       category: map['category'] as String,
       date: DateTime.parse(map['date'] as String),
       note: map['note'] as String?,
+      quantity: (map['quantity'] as num?)?.toDouble(),
       reimbursementId: map['reimbursement_id'] as int?,
     );
   }
@@ -80,11 +86,7 @@ class TransactionRecord {
 
 // 账本实体
 class Bill {
-  Bill({
-    this.id,
-    required this.name,
-    required this.isDefault,
-  });
+  Bill({this.id, required this.name, required this.isDefault});
 
   final int? id;
   final String name;
@@ -92,11 +94,7 @@ class Bill {
 
   // 转换为数据库存储 Map
   Map<String, Object?> toMap() {
-    return {
-      'id': id,
-      'name': name,
-      'is_default': isDefault ? 1 : 0,
-    };
+    return {'id': id, 'name': name, 'is_default': isDefault ? 1 : 0};
   }
 
   // 从数据库 Map 构建账本
@@ -111,11 +109,7 @@ class Bill {
 
 // 账户实体
 class Account {
-  Account({
-    this.id,
-    required this.name,
-    required this.isDefault,
-  });
+  Account({this.id, required this.name, required this.isDefault});
 
   final int? id;
   final String name;
@@ -123,11 +117,7 @@ class Account {
 
   // 转换为数据库存储 Map
   Map<String, Object?> toMap() {
-    return {
-      'id': id,
-      'name': name,
-      'is_default': isDefault ? 1 : 0,
-    };
+    return {'id': id, 'name': name, 'is_default': isDefault ? 1 : 0};
   }
 
   // 从数据库 Map 构建账户
@@ -142,11 +132,7 @@ class Account {
 
 // 基础材料实体
 class BaseMaterial {
-  BaseMaterial({
-    this.id,
-    required this.name,
-    required this.unit,
-  });
+  BaseMaterial({this.id, required this.name, required this.unit});
 
   final int? id;
   final String name;
@@ -154,11 +140,7 @@ class BaseMaterial {
 
   // 转换为数据库存储 Map
   Map<String, Object?> toMap() {
-    return {
-      'id': id,
-      'name': name,
-      'unit': unit,
-    };
+    return {'id': id, 'name': name, 'unit': unit};
   }
 
   // 从数据库 Map 构建基础材料

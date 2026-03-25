@@ -560,6 +560,7 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
       final material = _parseExportMaterialFields(
         category: record.category,
         note: note,
+        recordQuantity: record.quantity,
       );
       sheet.appendRow([
         i + 1,
@@ -594,22 +595,24 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
   _ExportMaterialFields _parseExportMaterialFields({
     required String category,
     required String note,
+    required double? recordQuantity,
   }) {
+    final quantityText = _formatExportQuantity(recordQuantity);
     if (category != '课程材料') {
-      return const _ExportMaterialFields();
+      return _ExportMaterialFields(quantity: quantityText);
     }
     final trimmedNote = note.trim();
     if (trimmedNote.isEmpty) {
-      return const _ExportMaterialFields();
+      return _ExportMaterialFields(quantity: quantityText);
     }
     final splitIndex = trimmedNote.indexOf(_materialNoteSplitter);
     final materialName = splitIndex == -1
         ? trimmedNote
         : trimmedNote.substring(0, splitIndex).trim();
     if (materialName.isEmpty) {
-      return const _ExportMaterialFields();
+      return _ExportMaterialFields(quantity: quantityText);
     }
-    final quantity = splitIndex == -1
+    final parsedQuantity = splitIndex == -1
         ? ''
         : trimmedNote
               .substring(splitIndex + _materialNoteSplitter.length)
@@ -617,9 +620,17 @@ class _ReimbursementBottomSheetState extends State<_ReimbursementBottomSheet> {
     final unit = widget.baseMaterials[materialName] ?? '';
     return _ExportMaterialFields(
       name: materialName,
-      quantity: quantity,
+      quantity: quantityText.isEmpty ? parsedQuantity : quantityText,
       unit: unit,
     );
+  }
+
+  String _formatExportQuantity(double? quantity) {
+    if (quantity == null || quantity <= 0) {
+      return '';
+    }
+    final value = quantity.toStringAsFixed(6);
+    return value.replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatDateTime(DateTime date) {

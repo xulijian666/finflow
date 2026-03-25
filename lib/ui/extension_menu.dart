@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'material_inventory_page.dart';
+import 'material_inventory_init_page.dart';
 import 'base_materials_page.dart';
 import 'reimbursement_page.dart';
+import 'zhengda_outbound_export_page.dart';
 
 // 扩展功能入口页
 class ExtensionMenuPage extends StatelessWidget {
@@ -27,10 +29,22 @@ class ExtensionMenuPage extends StatelessWidget {
         builder: (context) => const MaterialInventoryPage(),
       ),
       ExtensionMenuItem(
+        title: '材料库存初始化',
+        subtitle: '手动新增或批量导入初始库存',
+        icon: Icons.playlist_add_check_circle_outlined,
+        builder: (context) => const MaterialInventoryInitPage(),
+      ),
+      ExtensionMenuItem(
         title: '报销管理',
         subtitle: '管理报销单据',
         icon: Icons.receipt_long_outlined,
         builder: (context) => const ReimbursementPage(),
+      ),
+      ExtensionMenuItem(
+        title: '正大出库导出',
+        subtitle: '导入源数据并生成出库表格',
+        icon: Icons.calculate_outlined,
+        builder: (context) => const ZhengdaOutboundExportPage(),
       ),
       const ExtensionMenuItem(
         title: '账单数据导出',

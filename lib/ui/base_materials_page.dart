@@ -158,9 +158,49 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
     _BaseMaterialFormResult result,
   ) async {
     try {
+      final oldName = material.name.trim();
+      final newName = result.name.trim();
+      final nameChanged = oldName != newName;
+      if (nameChanged) {
+        final existed = await RecordDatabase.instance.fetchBaseMaterialByName(
+          newName,
+        );
+        if (existed != null && existed.id != material.id) {
+          _showMessage('材料名称已存在，请使用其他名称');
+          return;
+        }
+        final affectedCount = await RecordDatabase.instance
+            .countCourseMaterialRecordsByName(oldName);
+        final confirmed = await _confirmRenameSync(
+          oldName: oldName,
+          newName: newName,
+          affectedCount: affectedCount,
+        );
+        if (!confirmed) {
+          return;
+        }
+        final changed = await RecordDatabase.instance.renameBaseMaterialAndSync(
+          materialId: material.id!,
+          oldName: oldName,
+          newName: newName,
+          unit: result.unit,
+        );
+        if (!mounted) {
+          return;
+        }
+        final inventoryChanged =
+            (changed['inventoryIn'] ?? 0) +
+            (changed['inventoryInit'] ?? 0) +
+            (changed['inventoryOut'] ?? 0);
+        _showMessage(
+          '已更新基础材料，账单同步${changed['records'] ?? 0}条，库存同步$inventoryChanged条',
+        );
+        _loadMaterials(showLoading: false, reset: true);
+        return;
+      }
       final updated = BaseMaterial(
         id: material.id,
-        name: result.name,
+        name: newName,
         unit: result.unit,
       );
       await RecordDatabase.instance.updateBaseMaterial(updated);
@@ -172,6 +212,37 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
     } catch (error) {
       _showMessage('更新失败，请重试');
     }
+  }
+
+  Future<bool> _confirmRenameSync({
+    required String oldName,
+    required String newName,
+    required int affectedCount,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('同步变更确认'),
+          content: Text(
+            '将材料名称从“$oldName”改为“$newName”后，'
+            '关联的课程材料账单名称将同步变更（预计 $affectedCount 条），'
+            '材料库存中的入库/初始化/出库记录名称也会同步变更。是否继续？',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('继续'),
+            ),
+          ],
+        );
+      },
+    );
+    return result ?? false;
   }
 
   Future<void> _deleteMaterial(BaseMaterial material) async {
@@ -286,15 +357,13 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
         return;
       }
       if (mode == _ImportMode.replaceAll) {
-        final count =
-            await RecordDatabase.instance.replaceBaseMaterials(list);
+        final count = await RecordDatabase.instance.replaceBaseMaterials(list);
         if (!mounted) {
           return;
         }
         _showMessage('已全量覆盖，导入 $count 条');
       } else {
-        final result =
-            await RecordDatabase.instance.upsertBaseMaterials(list);
+        final result = await RecordDatabase.instance.upsertBaseMaterials(list);
         if (!mounted) {
           return;
         }
@@ -368,7 +437,9 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
                 FilledButton(
                   onPressed: () {
                     Navigator.of(context).pop(
-                      replaceAll ? _ImportMode.replaceAll : _ImportMode.increment,
+                      replaceAll
+                          ? _ImportMode.replaceAll
+                          : _ImportMode.increment,
                     );
                   },
                   child: const Text('继续'),
@@ -510,8 +581,9 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
                   child: const Text('取消'),
                 ),
                 FilledButton(
-                  onPressed: () =>
-                      Navigator.of(context).pop(Map<String, String>.from(selections)),
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).pop(Map<String, String>.from(selections)),
                   child: const Text('继续导入'),
                 ),
               ],
@@ -538,11 +610,7 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
     sheet.appendRow(headers);
     for (var i = 0; i < list.length; i++) {
       final item = list[i];
-      sheet.appendRow([
-        i + 1,
-        item.name,
-        item.unit,
-      ]);
+      sheet.appendRow([i + 1, item.name, item.unit]);
     }
     final directory = await _exportDirectory();
     final fileName = '基础材料导出_${_formatDateTime(DateTime.now())}.xlsx';
@@ -589,13 +657,14 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
     final hour = date.hour.toString().padLeft(2, '0');
     final minute = date.minute.toString().padLeft(2, '0');
     final second = date.second.toString().padLeft(2, '0');
-    return '$year$month$day' '_$hour$minute$second';
+    return '$year$month$day'
+        '_$hour$minute$second';
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -648,39 +717,34 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : _materials.isEmpty
-                      ? _EmptyState(
-                          keyword: _keyword,
-                          onAdd: () => _openForm(),
-                        )
-                      : ListView.separated(
-                          controller: _scrollController,
-                          itemCount:
-                              _materials.length + (_loadingMore ? 1 : 0),
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 6),
-                          itemBuilder: (context, index) {
-                            if (index >= _materials.length) {
-                              return const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 12),
-                                child: Center(
-                                  child: SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  ),
+                  ? _EmptyState(keyword: _keyword, onAdd: () => _openForm())
+                  : ListView.separated(
+                      controller: _scrollController,
+                      itemCount: _materials.length + (_loadingMore ? 1 : 0),
+                      separatorBuilder: (_, __) => const SizedBox(height: 6),
+                      itemBuilder: (context, index) {
+                        if (index >= _materials.length) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
                                 ),
-                              );
-                            }
-                            final material = _materials[index];
-                            return _MaterialRow(
-                              material: material,
-                              onEdit: () => _openForm(material: material),
-                              onDelete: () => _deleteMaterial(material),
-                            );
-                          },
-                        ),
+                              ),
+                            ),
+                          );
+                        }
+                        final material = _materials[index];
+                        return _MaterialRow(
+                          material: material,
+                          onEdit: () => _openForm(material: material),
+                          onDelete: () => _deleteMaterial(material),
+                        );
+                      },
+                    ),
             ),
           ],
         ),
@@ -696,10 +760,7 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
 
 // 空状态展示
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({
-    required this.keyword,
-    required this.onAdd,
-  });
+  const _EmptyState({required this.keyword, required this.onAdd});
 
   final String keyword;
   final VoidCallback onAdd;
@@ -799,8 +860,10 @@ class _MaterialRow extends StatelessWidget {
                       icon: const Icon(Icons.edit_outlined, size: 18),
                       padding: EdgeInsets.zero,
                       visualDensity: VisualDensity.compact,
-                      constraints:
-                          const BoxConstraints(minWidth: 32, minHeight: 32),
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
                       tooltip: '编辑',
                     ),
                     IconButton(
@@ -808,8 +871,10 @@ class _MaterialRow extends StatelessWidget {
                       icon: const Icon(Icons.delete_outline, size: 18),
                       padding: EdgeInsets.zero,
                       visualDensity: VisualDensity.compact,
-                      constraints:
-                          const BoxConstraints(minWidth: 32, minHeight: 32),
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
                       tooltip: '删除',
                     ),
                   ],
@@ -841,28 +906,19 @@ class _MaterialTableHeader extends StatelessWidget {
         children: [
           Expanded(
             flex: 3,
-            child: Text(
-              '材料名称',
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
+            child: Text('材料名称', style: Theme.of(context).textTheme.labelLarge),
           ),
           const SizedBox(width: 12),
           Expanded(
             flex: 1,
-            child: Text(
-              '单位',
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
+            child: Text('单位', style: Theme.of(context).textTheme.labelLarge),
           ),
           const SizedBox(width: 12),
           SizedBox(
             width: 88,
             child: Align(
               alignment: Alignment.centerRight,
-              child: Text(
-                '操作',
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
+              child: Text('操作', style: Theme.of(context).textTheme.labelLarge),
             ),
           ),
         ],
@@ -871,15 +927,10 @@ class _MaterialTableHeader extends StatelessWidget {
   }
 }
 
-enum _ImportMode {
-  increment,
-  replaceAll,
-}
+enum _ImportMode { increment, replaceAll }
 
 class _ImportParseResult {
-  const _ImportParseResult({
-    required this.nameToUnits,
-  });
+  const _ImportParseResult({required this.nameToUnits});
 
   final Map<String, Set<String>> nameToUnits;
 
@@ -999,10 +1050,7 @@ class _BaseMaterialFormSheetState extends State<_BaseMaterialFormSheet> {
 
 // 表单提交结果
 class _BaseMaterialFormResult {
-  const _BaseMaterialFormResult({
-    required this.name,
-    required this.unit,
-  });
+  const _BaseMaterialFormResult({required this.name, required this.unit});
 
   final String name;
   final String unit;

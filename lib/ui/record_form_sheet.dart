@@ -48,7 +48,8 @@ class RecordFormSheet extends StatefulWidget {
 class _RecordFormSheetState extends State<RecordFormSheet> {
   // 记账类型与金额输入状态
   static const String _prefKeyLongcatApiKey = 'longcat_api_key';
-  static const String _defaultLongcatApiKey = 'ak_1DQ2Mp2d77AD7nr5H840Y4xT2VD5D';
+  static const String _defaultLongcatApiKey =
+      'ak_1DQ2Mp2d77AD7nr5H840Y4xT2VD5D';
   late String _type;
   late String _amountText;
   late String _leftValue;
@@ -95,20 +96,25 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     _operator = null;
     _amountText = _leftValue;
     _date = record?.date ?? DateTime.now();
-    _category = record?.category ??
+    _category =
+        record?.category ??
         (_type == 'expense'
             ? _expenseCategories.first.name
             : _incomeCategories.first.name);
     _accountId = record?.accountId ?? widget.defaultAccountId;
     final noteText = record?.note ?? '';
-    _noteController = TextEditingController(text: noteText);
     final materialNote = _splitMaterialNote(noteText);
+    final initialQuantity = record?.quantity;
+    final quantityText = initialQuantity == null
+        ? (materialNote['quantity'] ?? '')
+        : _formatAmountInput(initialQuantity);
+    _noteController = TextEditingController(
+      text: _category == '课程材料' ? (materialNote['name'] ?? '') : noteText,
+    );
     _materialNameController = TextEditingController(
       text: materialNote['name'] ?? '',
     );
-    _materialQuantityController = TextEditingController(
-      text: materialNote['quantity'] ?? '',
-    );
+    _materialQuantityController = TextEditingController(text: quantityText);
     _loadAccounts();
   }
 
@@ -179,7 +185,9 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
       return {'name': trimmed, 'quantity': ''};
     }
     final name = trimmed.substring(0, index).trim();
-    final quantity = trimmed.substring(index + _materialNoteSplitter.length).trim();
+    final quantity = trimmed
+        .substring(index + _materialNoteSplitter.length)
+        .trim();
     return {'name': name, 'quantity': quantity};
   }
 
@@ -393,12 +401,13 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     final apiKey = apiKeyFromDefine.isNotEmpty
         ? apiKeyFromDefine
         : (Platform.environment['LONGCAT_API_KEY'] ??
-            (storedKey.isNotEmpty ? storedKey : _defaultLongcatApiKey));
+              (storedKey.isNotEmpty ? storedKey : _defaultLongcatApiKey));
     if (apiKey.trim().isEmpty) {
       _showMessage('未配置智能记账密钥，已使用本地匹配');
       return _localMatchCandidates(inputName, baseNames).take(3).toList();
     }
-    final prompt = '''
+    final prompt =
+        '''
 你是材料匹配助手，请从材料列表中找出与用户备注最相近的材料名称。
 要求：
 1. 仅返回 JSON 数组，数组元素为材料名称字符串。
@@ -422,8 +431,9 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
 
     final client = HttpClient();
     try {
-      final uri =
-          Uri.parse('https://api.longcat.chat/openai/v1/chat/completions');
+      final uri = Uri.parse(
+        'https://api.longcat.chat/openai/v1/chat/completions',
+      );
       final request = await client.postUrl(uri);
       request.headers.contentType = ContentType.json;
       request.headers.set('Authorization', 'Bearer $apiKey');
@@ -612,10 +622,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text('材料名称：$name'),
-              ),
+              Align(alignment: Alignment.centerLeft, child: Text('材料名称：$name')),
               const SizedBox(height: 12),
               TextField(
                 controller: unitController,
@@ -685,13 +692,14 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     });
     try {
       String? note;
+      double? quantity;
       String? invMaterialName;
       double? invQuantity;
       String? invUnit;
 
       if (_isMaterialCategory) {
         final materialName = _materialNameController.text.trim();
-        final quantity = _materialQuantityController.text.trim();
+        final quantityText = _materialQuantityController.text.trim();
         if (materialName.isEmpty) {
           _showMessage('请输入材料名称');
           setState(() {
@@ -699,14 +707,14 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
           });
           return;
         }
-        if (quantity.isEmpty) {
+        if (quantityText.isEmpty) {
           _showMessage('请输入数量');
           setState(() {
             _saving = false;
           });
           return;
         }
-        final qtyValue = double.tryParse(quantity);
+        final qtyValue = double.tryParse(quantityText);
         if (qtyValue == null || qtyValue <= 0) {
           _showMessage('数量必须大于0');
           setState(() {
@@ -714,8 +722,9 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
           });
           return;
         }
-        final matched = await RecordDatabase.instance
-            .fetchBaseMaterialByName(materialName);
+        final matched = await RecordDatabase.instance.fetchBaseMaterialByName(
+          materialName,
+        );
         var finalName = materialName;
         if (matched == null) {
           final resolved = await _resolveMaterialName(materialName);
@@ -728,18 +737,33 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
           finalName = resolved.trim();
           _materialNameController.text = finalName;
         }
-        
+
         // 获取单位
-        final baseMat = await RecordDatabase.instance.fetchBaseMaterialByName(finalName);
+        final baseMat = await RecordDatabase.instance.fetchBaseMaterialByName(
+          finalName,
+        );
         if (baseMat != null) {
           invUnit = baseMat.unit;
         }
-        
+
         invMaterialName = finalName;
         invQuantity = qtyValue;
-        note = _buildMaterialNote(finalName, quantity);
+        quantity = qtyValue;
+        note = _buildMaterialNote(finalName, quantityText);
       } else {
         final rawNote = _noteController.text.trim();
+        final rawQuantity = _materialQuantityController.text.trim();
+        if (rawQuantity.isNotEmpty) {
+          final qtyValue = double.tryParse(rawQuantity);
+          if (qtyValue == null || qtyValue <= 0) {
+            _showMessage('数量必须大于0');
+            setState(() {
+              _saving = false;
+            });
+            return;
+          }
+          quantity = qtyValue;
+        }
         note = rawNote.isEmpty ? null : rawNote;
       }
       final record = TransactionRecord(
@@ -751,8 +775,9 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
         category: _category!,
         date: _date,
         note: note,
+        quantity: quantity,
       );
-      
+
       int recordId;
       if (widget.record == null) {
         recordId = await RecordDatabase.instance.insertRecord(record);
@@ -762,7 +787,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
         // 更新时先清理旧的库存记录
         await RecordDatabase.instance.deleteInventoryByRecordId(recordId);
       }
-      
+
       // 写入库存记录
       if (invMaterialName != null && invQuantity != null) {
         await RecordDatabase.instance.insertInventoryRecord(
@@ -853,8 +878,9 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   @override
   Widget build(BuildContext context) {
     // 构建表单界面
-    final categories =
-        _type == 'expense' ? _expenseCategories : _incomeCategories;
+    final categories = _type == 'expense'
+        ? _expenseCategories
+        : _incomeCategories;
     final bottom = MediaQuery.of(context).viewInsets.bottom;
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
@@ -876,14 +902,8 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                     Expanded(
                       child: SegmentedButton<String>(
                         segments: const [
-                          ButtonSegment(
-                            value: 'expense',
-                            label: Text('支出'),
-                          ),
-                          ButtonSegment(
-                            value: 'income',
-                            label: Text('收入'),
-                          ),
+                          ButtonSegment(value: 'expense', label: Text('支出')),
+                          ButtonSegment(value: 'income', label: Text('收入')),
                         ],
                         selected: {_type},
                         onSelectionChanged: (value) {
@@ -895,13 +915,15 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                                 : _incomeCategories.first.name;
                             if (_category == '课程材料' &&
                                 _materialNameController.text.trim().isEmpty) {
-                              _materialNameController.text =
-                                  _noteController.text.trim();
+                              _materialNameController.text = _noteController
+                                  .text
+                                  .trim();
                             } else if (previousCategory == '课程材料' &&
                                 _category != '课程材料' &&
                                 _noteController.text.trim().isEmpty) {
-                              _noteController.text =
-                                  _materialNameController.text.trim();
+                              _noteController.text = _materialNameController
+                                  .text
+                                  .trim();
                             }
                           });
                         },
@@ -917,10 +939,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                 const SizedBox(height: 16),
                 _buildAccountSection(),
                 const SizedBox(height: 16),
-                Text(
-                  '分类',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+                Text('分类', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -941,13 +960,13 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                           _category = item.name;
                           if (_category == '课程材料' &&
                               _materialNameController.text.trim().isEmpty) {
-                            _materialNameController.text =
-                                _noteController.text.trim();
+                            _materialNameController.text = _noteController.text
+                                .trim();
                           } else if (previousCategory == '课程材料' &&
                               _category != '课程材料' &&
                               _noteController.text.trim().isEmpty) {
-                            _noteController.text =
-                                _materialNameController.text.trim();
+                            _noteController.text = _materialNameController.text
+                                .trim();
                           }
                         });
                       },
@@ -957,10 +976,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                 const SizedBox(height: 16),
                 Row(
                   children: [
-                    Text(
-                      '日期',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
+                    Text('日期', style: Theme.of(context).textTheme.titleMedium),
                     const Spacer(),
                     TextButton(
                       onPressed: _pickDate,
@@ -1012,13 +1028,33 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                     ],
                   ),
                 ] else ...[
-                  TextField(
-                    controller: _noteController,
-                    decoration: const InputDecoration(
-                      hintText: '',
-                      border: OutlineInputBorder(),
-                      counterText: '',
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _noteController,
+                          decoration: const InputDecoration(
+                            hintText: '备注',
+                            border: OutlineInputBorder(),
+                            counterText: '',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _materialQuantityController,
+                          decoration: const InputDecoration(
+                            hintText: '数量',
+                            border: OutlineInputBorder(),
+                            counterText: '',
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
                 const SizedBox(height: 12),
@@ -1050,10 +1086,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     if (_loadingAccounts) {
       return Row(
         children: [
-          Text(
-            '账户',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
+          Text('账户', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(width: 12),
           const SizedBox(
             width: 18,
@@ -1066,10 +1099,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '账户',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
+        Text('账户', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
@@ -1152,10 +1182,7 @@ class _NumberPad extends StatelessWidget {
         const SizedBox(height: 8),
         _PadRow(
           children: [
-            _PadButton(
-              label: '再记',
-              onTap: disabled ? null : onSaveAndContinue,
-            ),
+            _PadButton(label: '再记', onTap: disabled ? null : onSaveAndContinue),
             _PadButton(label: '0', onTap: () => onKeyPressed('0')),
             _PadButton(label: '.', onTap: () => onKeyPressed('.')),
             _PadButton(
@@ -1237,10 +1264,7 @@ class _PadButton extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
-        child: SizedBox(
-          height: 52,
-          child: Center(child: child),
-        ),
+        child: SizedBox(height: 52, child: Center(child: child)),
       ),
     );
   }
