@@ -1,26 +1,25 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:excel/excel.dart' as excel;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-class ZhengdaOutboundExportPage extends StatefulWidget {
-  const ZhengdaOutboundExportPage({super.key});
+class CourseOutboundImportPage extends StatefulWidget {
+  const CourseOutboundImportPage({super.key});
 
   @override
-  State<ZhengdaOutboundExportPage> createState() =>
-      _ZhengdaOutboundExportPageState();
+  State<CourseOutboundImportPage> createState() =>
+      _CourseOutboundImportPageState();
 }
 
-class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
-  static const List<String> _gradeOrder = ['一年级', '二年级', '三年级', '四年级', '五年级'];
+class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
   static const List<String> _requiredColumns = [
     '序号',
     '年级',
@@ -35,19 +34,11 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
   ];
   final Map<String, TextEditingController> _studentControllers = {};
   final Map<String, TextEditingController> _teacherControllers = {};
-  final List<String> _debugLogs = [];
+  final List<_ExportHistoryItem> _historyRecords = [];
   Uint8List? _sourceBytes;
   String? _sourceFileName;
   bool _calculating = false;
-
-  @override
-  void initState() {
-    super.initState();
-    for (final grade in _gradeOrder) {
-      _studentControllers[grade] = TextEditingController(text: '0');
-      _teacherControllers[grade] = TextEditingController(text: '0');
-    }
-  }
+  List<String> _grades = [];
 
   @override
   void dispose() {
@@ -80,18 +71,74 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
       _showMessage('读取源文件失败');
       return;
     }
-    _appendDebug('已导入文件: ${file.name}, 大小: ${bytes.lengthInBytes} bytes');
-    setState(() {
-      _sourceBytes = bytes;
-      _sourceFileName = file.name;
-    });
+    try {
+      final grades = _extractGrades(bytes);
+      if (grades.isEmpty) {
+        _showMessage('源数据未识别到年级');
+        return;
+      }
+      _appendDebug('已导入文件: ${file.name}, 年级=${grades.join("、")}');
+      setState(() {
+        _sourceBytes = bytes;
+        _sourceFileName = file.name;
+        _grades = grades;
+        _syncPeopleControllers(grades);
+      });
+    } catch (error) {
+      final message = error.toString().replaceFirst('Exception: ', '');
+      _appendDebug('解析源文件失败: $message');
+      _showMessage('解析源文件失败：$message');
+    }
+  }
+
+  List<String> _extractGrades(Uint8List sourceBytes) {
+    final workbook = excel.Excel.decodeBytes(sourceBytes);
+    final sourceSheet = _findSourceSheet(workbook);
+    final rows = sourceSheet.rows;
+    final headerValues = rows.first.map(_cellText).toList();
+    final gradeIndex = headerValues.indexOf('年级');
+    if (gradeIndex < 0) {
+      throw Exception('表头缺少“年级”');
+    }
+    final seen = <String>{};
+    final grades = <String>[];
+    for (var i = 1; i < rows.length; i++) {
+      final row = rows[i];
+      final grade = _cellText(_cellAt(row, gradeIndex));
+      if (grade.isEmpty || seen.contains(grade)) {
+        continue;
+      }
+      seen.add(grade);
+      grades.add(grade);
+    }
+    return grades;
+  }
+
+  void _syncPeopleControllers(List<String> grades) {
+    final gradeSet = grades.toSet();
+    final studentRemove = _studentControllers.keys
+        .where((grade) => !gradeSet.contains(grade))
+        .toList();
+    for (final grade in studentRemove) {
+      _studentControllers.remove(grade)?.dispose();
+    }
+    final teacherRemove = _teacherControllers.keys
+        .where((grade) => !gradeSet.contains(grade))
+        .toList();
+    for (final grade in teacherRemove) {
+      _teacherControllers.remove(grade)?.dispose();
+    }
+    for (final grade in grades) {
+      _studentControllers.putIfAbsent(grade, () => TextEditingController());
+      _teacherControllers.putIfAbsent(grade, () => TextEditingController());
+    }
   }
 
   Future<void> _calculateAndExport() async {
-    if (_sourceBytes == null || _calculating) {
+    if (_sourceBytes == null || _calculating || _grades.isEmpty) {
       return;
     }
-    final peopleCounts = _collectPeopleCounts();
+    final peopleCounts = await _collectPeopleCounts();
     if (peopleCounts == null) {
       return;
     }
@@ -109,6 +156,25 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
       if (!mounted) {
         return;
       }
+      final recordedAt = DateTime.now();
+      final snapshot = {
+        for (final entry in peopleCounts.entries)
+          entry.key: {
+            '学生': entry.value['学生'] ?? 0,
+            '老师': entry.value['老师'] ?? 0,
+          },
+      };
+      setState(() {
+        _addHistoryRecord(
+          _ExportHistoryItem(
+            createdAt: recordedAt,
+            filePath: filePath,
+            fileName: p.basename(filePath),
+            sourceFileName: _sourceFileName ?? '未知',
+            peopleCounts: snapshot,
+          ),
+        );
+      });
       _appendDebug('导出完成: $filePath, 分享触发=${shared ? "是" : "否"}');
       _showMessage(shared ? '已导出并唤起分享' : '已导出到 $filePath');
     } catch (error, stackTrace) {
@@ -128,20 +194,74 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
     }
   }
 
-  Map<String, Map<String, int>>? _collectPeopleCounts() {
+  Future<Map<String, Map<String, int>>?> _collectPeopleCounts() async {
+    if (_grades.isEmpty) {
+      _showMessage('请先导入源数据');
+      return null;
+    }
     final result = <String, Map<String, int>>{};
-    for (final grade in _gradeOrder) {
+    final missingFields = <String>[];
+    for (final grade in _grades) {
       final studentText = _studentControllers[grade]!.text.trim();
       final teacherText = _teacherControllers[grade]!.text.trim();
-      final student = int.tryParse(studentText);
-      final teacher = int.tryParse(teacherText);
-      if (student == null || teacher == null || student < 0 || teacher < 0) {
-        _showMessage('$grade 人数请输入非负整数');
+      final student = studentText.isEmpty ? 0 : int.tryParse(studentText);
+      final teacher = teacherText.isEmpty ? 0 : int.tryParse(teacherText);
+      if (student == null || student < 0) {
+        _showMessage('$grade 学生人数请输入非负整数');
         return null;
+      }
+      if (teacher == null || teacher < 0) {
+        _showMessage('$grade 老师人数请输入非负整数');
+        return null;
+      }
+      if (studentText.isEmpty) {
+        missingFields.add('$grade-学生人数');
+      }
+      if (teacherText.isEmpty) {
+        missingFields.add('$grade-老师人数');
       }
       result[grade] = {'学生': student, '老师': teacher};
     }
+    if (missingFields.isNotEmpty) {
+      final continueExport = await _confirmContinueWithMissingFields(
+        missingFields,
+      );
+      if (!continueExport) {
+        _appendDebug('用户取消导出，未填写项：${missingFields.join('、')}');
+        return null;
+      }
+      _appendDebug('未填写项按0处理：${missingFields.join('、')}');
+    }
     return result;
+  }
+
+  Future<bool> _confirmContinueWithMissingFields(
+    List<String> missingFields,
+  ) async {
+    if (!mounted) {
+      return false;
+    }
+    final detail = missingFields.join('、');
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('存在未填写人数'),
+          content: Text('以下输入框未填写：$detail。\n继续导出将按 0 处理，是否继续？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('继续'),
+            ),
+          ],
+        );
+      },
+    );
+    return result ?? false;
   }
 
   _AggregateResult _readAndAggregate(
@@ -158,13 +278,14 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
     final index = {
       for (final name in _requiredColumns) name: headerValues.indexOf(name),
     };
+    final grades = peopleCounts.keys.toList();
     final aggregate = <String, Map<_MaterialKey, _AggregateItem>>{
-      for (final grade in _gradeOrder) grade: <_MaterialKey, _AggregateItem>{},
+      for (final grade in grades) grade: <_MaterialKey, _AggregateItem>{},
     };
     for (var i = 1; i < rows.length; i++) {
       final row = rows[i];
       final grade = _cellText(_cellAt(row, index['年级']!));
-      if (!_gradeOrder.contains(grade)) {
+      if (!peopleCounts.containsKey(grade)) {
         continue;
       }
       final role = _cellText(_cellAt(row, index['角色']!));
@@ -239,7 +360,11 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
         )
         .toList(growable: true);
     _appendDebug('聚合完成: 原始行=${sourceRows.length}');
-    return _AggregateResult(aggregate: aggregate, sourceRows: sourceRows);
+    return _AggregateResult(
+      aggregate: aggregate,
+      sourceRows: sourceRows,
+      grades: grades,
+    );
   }
 
   Future<String> _writeResult({
@@ -262,7 +387,7 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
         rowIndex: i + 1,
       );
     }
-    for (final grade in _gradeOrder) {
+    for (final grade in aggregate.grades) {
       final sheet = workbook[grade];
       final teacherCount = peopleCounts[grade]!['老师'] ?? 0;
       final studentCount = peopleCounts[grade]!['学生'] ?? 0;
@@ -335,17 +460,22 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
     _appendSheetRow(
       sheet: summarySheet,
       stage: '出库汇总-表头',
-      row: ['序号', '材料名称', '出库总数量', '一年级数量', '二年级数量', '三年级数量', '四年级数量', '五年级数量'],
+      row: [
+        '序号',
+        '材料名称',
+        '出库总数量',
+        ...aggregate.grades.map((grade) => '$grade数量'),
+      ],
     );
     final summaryData = <String, Map<String, double>>{};
-    for (final grade in _gradeOrder) {
+    for (final grade in aggregate.grades) {
       final gradeData = aggregate.aggregate[grade] ?? {};
       for (final entry in gradeData.entries) {
         final material = entry.key.materialName;
         final totalQty = entry.value.teacherQty + entry.value.studentQty;
         final gradeMap = summaryData.putIfAbsent(
           material,
-          () => {for (final g in _gradeOrder) g: 0},
+          () => {for (final g in aggregate.grades) g: 0},
         );
         gradeMap[grade] = (gradeMap[grade] ?? 0) + totalQty;
       }
@@ -368,7 +498,7 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
       });
     for (var i = 0; i < summaryRows.length; i++) {
       final row = summaryRows[i];
-      final gradeValues = _gradeOrder
+      final gradeValues = aggregate.grades
           .map((grade) => row.value[grade] ?? 0)
           .toList();
       final total = gradeValues.fold<double>(0, (sum, item) => sum + item);
@@ -380,11 +510,7 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
           i + 1,
           row.key,
           _formatNumber(total),
-          _formatNumber(gradeValues[0]),
-          _formatNumber(gradeValues[1]),
-          _formatNumber(gradeValues[2]),
-          _formatNumber(gradeValues[3]),
-          _formatNumber(gradeValues[4]),
+          ...gradeValues.map((value) => _formatNumber(value)),
         ],
       );
     }
@@ -397,7 +523,7 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
     }
     final frozenBytes = _freezeHeaderRows(bytes);
     final directory = await _exportDirectory();
-    final fileName = '正大出库数量汇总_${_formatDateTime(DateTime.now())}.xlsx';
+    final fileName = '课程出库导出_${_formatDateTime(DateTime.now())}.xlsx';
     final exportFile = File(p.join(directory.path, fileName));
     await exportFile.writeAsBytes(frozenBytes, flush: true);
     _appendDebug('xlsx写入完成: ${exportFile.path}');
@@ -676,25 +802,6 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
     final line =
         '[${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}] $message';
     debugPrint(line);
-    if (!mounted) {
-      _debugLogs.add(line);
-      return;
-    }
-    setState(() {
-      _debugLogs.add(line);
-      if (_debugLogs.length > 300) {
-        _debugLogs.removeRange(0, _debugLogs.length - 300);
-      }
-    });
-  }
-
-  Future<void> _copyLogs() async {
-    final content = _debugLogs.join('\n');
-    await Clipboard.setData(ClipboardData(text: content));
-    if (!mounted) {
-      return;
-    }
-    _showMessage('调试日志已复制');
   }
 
   dynamic _cellExportValue(excel.Data? cell) {
@@ -732,6 +839,81 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
     }
   }
 
+  void _addHistoryRecord(_ExportHistoryItem item) {
+    _historyRecords.add(item);
+    _historyRecords.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    if (_historyRecords.length > 3) {
+      _historyRecords.removeRange(3, _historyRecords.length);
+    }
+  }
+
+  String _formatHistoryDateTime(DateTime date) {
+    final year = date.year.toString().padLeft(4, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$year-$month-$day $hour:$minute';
+  }
+
+  Future<void> _showHistoryDetail(_ExportHistoryItem item) async {
+    if (!mounted) {
+      return;
+    }
+    final grades = item.peopleCounts.keys.toList()..sort();
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('录入人数｜${_formatHistoryDateTime(item.createdAt)}'),
+          content: SizedBox(
+            width: 360,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('源文件：${item.sourceFileName}'),
+                  const SizedBox(height: 8),
+                  ...grades.map((grade) {
+                    final count = item.peopleCounts[grade]!;
+                    final student = count['学生'] ?? 0;
+                    final teacher = count['老师'] ?? 0;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text('$grade：学生 $student，老师 $teacher'),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _downloadHistoryFile(_ExportHistoryItem item) async {
+    final file = File(item.filePath);
+    if (!await file.exists()) {
+      if (mounted) {
+        _showMessage('文件不存在：${item.fileName}');
+      }
+      return;
+    }
+    final shared = await _shareExportFile(item.filePath);
+    if (!mounted) {
+      return;
+    }
+    _showMessage(shared ? '已唤起下载分享：${item.fileName}' : '文件路径：${item.filePath}');
+  }
+
   String _formatDateTime(DateTime date) {
     final year = date.year.toString().padLeft(4, '0');
     final month = date.month.toString().padLeft(2, '0');
@@ -752,12 +934,12 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('正大出库导出')),
+      appBar: AppBar(title: const Text('课程出库导出')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            '先导入“正大出库清洗.xlsx”，再输入五个年级的学生与老师人数，点击计算后导出结果。',
+            '先导入源数据，系统自动识别年级后，再输入各年级学生与老师人数，点击计算后导出结果。',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
@@ -768,13 +950,20 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
               _sourceFileName == null ? '导入 xlsx 源数据' : '已导入：$_sourceFileName',
             ),
           ),
+          if (_grades.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              '识别到年级：${_grades.join('、')}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
           const SizedBox(height: 16),
-          ..._gradeOrder.map(
+          ..._grades.map(
             (grade) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Row(
                 children: [
-                  SizedBox(width: 72, child: Text(grade)),
+                  SizedBox(width: 88, child: Text(grade)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: TextField(
@@ -803,9 +992,14 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
               ),
             ),
           ),
+          if (_grades.isEmpty)
+            Text(
+              '导入后将按源数据中的年级动态生成人数输入项',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           const SizedBox(height: 12),
           FilledButton.icon(
-            onPressed: _sourceBytes == null || _calculating
+            onPressed: _sourceBytes == null || _calculating || _grades.isEmpty
                 ? null
                 : _calculateAndExport,
             icon: _calculating
@@ -824,49 +1018,61 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          '调试日志',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: _debugLogs.isEmpty
-                            ? null
-                            : () {
-                                setState(() {
-                                  _debugLogs.clear();
-                                });
-                              },
-                        child: const Text('清空'),
-                      ),
-                      TextButton(
-                        onPressed: _debugLogs.isEmpty ? null : _copyLogs,
-                        child: const Text('复制'),
-                      ),
-                    ],
+                  const Text(
+                    '历史导出记录',
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    constraints: const BoxConstraints(
-                      minHeight: 80,
-                      maxHeight: 220,
+                  if (_historyRecords.isEmpty)
+                    Text(
+                      '暂无历史导出记录',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    )
+                  else
+                    Column(
+                      children: _historyRecords.map((item) {
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.black12),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _formatHistoryDateTime(item.createdAt),
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      item.fileName,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: () => _showHistoryDetail(item),
+                                child: const Text('查看'),
+                              ),
+                              FilledButton.tonal(
+                                onPressed: () => _downloadHistoryFile(item),
+                                child: const Text('下载'),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
                     ),
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.black12),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: SingleChildScrollView(
-                      child: SelectableText(
-                        _debugLogs.isEmpty ? '暂无日志' : _debugLogs.join('\n'),
-                        style: const TextStyle(fontSize: 12, height: 1.4),
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -877,11 +1083,32 @@ class _ZhengdaOutboundExportPageState extends State<ZhengdaOutboundExportPage> {
   }
 }
 
+class _ExportHistoryItem {
+  const _ExportHistoryItem({
+    required this.createdAt,
+    required this.filePath,
+    required this.fileName,
+    required this.sourceFileName,
+    required this.peopleCounts,
+  });
+
+  final DateTime createdAt;
+  final String filePath;
+  final String fileName;
+  final String sourceFileName;
+  final Map<String, Map<String, int>> peopleCounts;
+}
+
 class _AggregateResult {
-  const _AggregateResult({required this.aggregate, required this.sourceRows});
+  const _AggregateResult({
+    required this.aggregate,
+    required this.sourceRows,
+    required this.grades,
+  });
 
   final Map<String, Map<_MaterialKey, _AggregateItem>> aggregate;
   final List<List<dynamic>> sourceRows;
+  final List<String> grades;
 }
 
 class _MaterialKey {

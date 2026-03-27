@@ -4,6 +4,7 @@ import 'material_inventory_page.dart';
 import 'material_inventory_init_page.dart';
 import 'base_materials_page.dart';
 import 'reimbursement_page.dart';
+import 'course_outbound_import_page.dart';
 import 'zhengda_outbound_export_page.dart';
 
 // 扩展功能入口页
@@ -45,6 +46,12 @@ class ExtensionMenuPage extends StatelessWidget {
         subtitle: '导入源数据并生成出库表格',
         icon: Icons.calculate_outlined,
         builder: (context) => const ZhengdaOutboundExportPage(),
+      ),
+      ExtensionMenuItem(
+        title: '课程出库导出',
+        subtitle: '按导入数据动态年级计算并导出',
+        icon: Icons.table_chart_outlined,
+        builder: (context) => const CourseOutboundImportPage(),
       ),
       const ExtensionMenuItem(
         title: '账单数据导出',
