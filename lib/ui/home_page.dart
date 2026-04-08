@@ -938,6 +938,15 @@ class _HomePageState extends State<HomePage>
     return account.name.trim() == RecordDatabase.lineAccountName;
   }
 
+  bool _isLineAccountRecord(TransactionRecord record) {
+    for (final account in _accounts) {
+      if (account.id == record.accountId) {
+        return _isLineAccount(account);
+      }
+    }
+    return false;
+  }
+
   String _currentBillName() {
     // 当前账本显示名称
     final id = _currentBillId;
@@ -1609,15 +1618,16 @@ class _HomePageState extends State<HomePage>
                                     color: Colors.black45,
                                   ),
                                 ),
-                              Text(
-                                _formatPlainAmount(balance),
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: balance >= 0
-                                      ? const Color(0xFF1B7F5A)
-                                      : const Color(0xFFB5473B),
+                              if (!isLineAccount)
+                                Text(
+                                  _formatPlainAmount(balance),
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: balance >= 0
+                                        ? const Color(0xFF1B7F5A)
+                                        : const Color(0xFFB5473B),
+                                  ),
                                 ),
-                              ),
                             ],
                     ),
                   ),
@@ -2111,6 +2121,7 @@ class _HomePageState extends State<HomePage>
   }) {
     // 单条记录展示
     final isMarked = _isMaterialInBaseList(record);
+    final isLineAccountRecord = _isLineAccountRecord(record);
     return InkWell(
       onTap: () => _openForm(record: record),
       onLongPress: () async {
@@ -2134,6 +2145,15 @@ class _HomePageState extends State<HomePage>
                 child: const Icon(
                   Icons.verified,
                   size: 16,
+                  color: Color(0xFF1B7F5A),
+                ),
+              ),
+            if (isLineAccountRecord)
+              const Padding(
+                padding: EdgeInsets.only(right: 4),
+                child: Icon(
+                  Icons.label_important,
+                  size: 15,
                   color: Color(0xFF1B7F5A),
                 ),
               ),
@@ -2309,7 +2329,6 @@ class _HomePageState extends State<HomePage>
   }
 
   Future<String> _saveAsXlsx(List<Map<String, Object?>> rows) async {
-    // 将导出数据写入 xlsx 文件
     final headers = [
       '序号',
       '日期',
@@ -2322,10 +2341,28 @@ class _HomePageState extends State<HomePage>
       '材料名称',
       '数量',
       '单位',
+      '归属项目',
+      '归属年级',
+      '跨项目重复材料',
+      '跨年级重复材料',
     ];
     final workbook = excel.Excel.createExcel();
     final sheet = workbook['Sheet1'];
-    debugPrint('工作簿与默认 Sheet1 已创建');
+    final relationRows = await RecordDatabase.instance
+        .fetchProjectMaterialRelations();
+    final relationMap = <String, _MaterialRelationMeta>{};
+    for (final row in relationRows) {
+      final key = row.materialName.trim();
+      if (key.isEmpty) {
+        continue;
+      }
+      final current =
+          relationMap[key] ??
+          _MaterialRelationMeta(projects: <String>{}, grades: <String>{});
+      current.projects.add(row.projectName.trim());
+      current.grades.add(row.gradeName.trim());
+      relationMap[key] = current;
+    }
     sheet.appendRow(headers);
     for (var i = 0; i < rows.length; i++) {
       final r = rows[i];
@@ -2346,6 +2383,13 @@ class _HomePageState extends State<HomePage>
         note: note,
         recordQuantity: quantity,
       );
+      final relation = relationMap[material.name.trim()];
+      final projects = relation == null
+          ? <String>[]
+          : (relation.projects.where((e) => e.isNotEmpty).toList()..sort());
+      final grades = relation == null
+          ? <String>[]
+          : (relation.grades.where((e) => e.isNotEmpty).toList()..sort());
       sheet.appendRow([
         i + 1,
         date,
@@ -2358,9 +2402,13 @@ class _HomePageState extends State<HomePage>
         material.name,
         material.quantity,
         material.unit,
+        projects.join('、'),
+        grades.join('、'),
+        relation == null ? '' : (projects.length > 1 ? '是' : '否'),
+        relation == null ? '' : (grades.length > 1 ? '是' : '否'),
       ]);
     }
-    debugPrint('数据写入工作表完成，准备保存为文件');
+    _beautifyExportSheet(sheet);
     final directory = await _exportDirectory();
     final fileName = '数据导出_${_formatDateTime(DateTime.now())}.xlsx';
     final exportFile = File(p.join(directory.path, fileName));
@@ -2373,6 +2421,94 @@ class _HomePageState extends State<HomePage>
     await exportFile.writeAsBytes(bytes, flush: true);
     debugPrint('文件写入完成：${exportFile.path}');
     return exportFile.path;
+  }
+
+  void _beautifyExportSheet(excel.Sheet sheet) {
+    if (sheet.maxRows <= 0 || sheet.maxCols <= 0) {
+      return;
+    }
+    final border = excel.Border(
+      borderStyle: excel.BorderStyle.Thin,
+      borderColorHex: '#FFD9D9D9',
+    );
+    final headerStyle = excel.CellStyle(
+      bold: true,
+      fontColorHex: '#FF1F2937',
+      backgroundColorHex: '#FFEAF4F2',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+      horizontalAlign: excel.HorizontalAlign.Center,
+      verticalAlign: excel.VerticalAlign.Center,
+    );
+    final oddStyle = excel.CellStyle(
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+      horizontalAlign: excel.HorizontalAlign.Left,
+      verticalAlign: excel.VerticalAlign.Center,
+    );
+    final evenStyle = excel.CellStyle(
+      backgroundColorHex: '#FFF9FCFB',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+      horizontalAlign: excel.HorizontalAlign.Left,
+      verticalAlign: excel.VerticalAlign.Center,
+    );
+    for (var row = 0; row < sheet.maxRows; row++) {
+      for (var col = 0; col < sheet.maxCols; col++) {
+        final cell = sheet.cell(
+          excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row),
+        );
+        if (row == 0) {
+          cell.cellStyle = headerStyle;
+        } else {
+          cell.cellStyle = row.isEven ? evenStyle : oddStyle;
+        }
+      }
+    }
+    for (var col = 0; col < sheet.maxCols; col++) {
+      var maxWidth = 0;
+      for (var row = 0; row < sheet.maxRows; row++) {
+        final cell = sheet.cell(
+          excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row),
+        );
+        final width = _textDisplayWidth(_excelCellText(cell.value));
+        if (width > maxWidth) {
+          maxWidth = width;
+        }
+      }
+      sheet.setColWidth(col, (maxWidth + 2).toDouble().clamp(10, 40));
+    }
+  }
+
+  int _textDisplayWidth(String text) {
+    if (text.isEmpty) {
+      return 0;
+    }
+    var total = 0;
+    for (final rune in text.runes) {
+      total += rune <= 0x7F ? 1 : 2;
+    }
+    return total;
+  }
+
+  String _excelCellText(Object? value) {
+    if (value == null) {
+      return '';
+    }
+    try {
+      final dynamic raw = value;
+      final inner = raw.value;
+      if (inner != null) {
+        return inner.toString().trim();
+      }
+    } catch (_) {}
+    return value.toString().trim();
   }
 
   Future<Directory> _exportDirectory() async {
@@ -2594,6 +2730,13 @@ class _ExportMaterialFields {
   final String name;
   final String quantity;
   final String unit;
+}
+
+class _MaterialRelationMeta {
+  _MaterialRelationMeta({required this.projects, required this.grades});
+
+  final Set<String> projects;
+  final Set<String> grades;
 }
 
 class _ExportDialog extends StatefulWidget {

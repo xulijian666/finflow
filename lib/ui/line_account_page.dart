@@ -1,4 +1,12 @@
+import 'dart:io';
+
+import 'package:excel/excel.dart' as excel;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../data/record_database.dart';
 import '../data/transaction_record.dart';
@@ -20,6 +28,7 @@ class _LineAccountPageState extends State<LineAccountPage> {
   bool _loading = true;
   bool _loadingError = false;
   String _keyword = '';
+  bool _exporting = false;
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -100,7 +109,21 @@ class _LineAccountPageState extends State<LineAccountPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text(RecordDatabase.lineAccountName)),
+      appBar: AppBar(
+        title: const Text(RecordDatabase.lineAccountName),
+        actions: [
+          TextButton(
+            onPressed: _exporting ? null : _exportRecords,
+            child: _exporting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('导出'),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(
@@ -294,6 +317,74 @@ class _LineAccountPageState extends State<LineAccountPage> {
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
     return '$year-$month-$day';
+  }
+
+  Future<void> _exportRecords() async {
+    if (_records.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('暂无可导出记录')));
+      return;
+    }
+    setState(() {
+      _exporting = true;
+    });
+    try {
+      final workbook = excel.Excel.createExcel();
+      final sheet = workbook['Sheet1'];
+      sheet.appendRow(['日期', '类型', '分类', '标题', '金额', '备注']);
+      for (final record in _records) {
+        sheet.appendRow([
+          _formatDate(record.date),
+          record.type == 'income' ? '收入' : '支出',
+          record.category,
+          _buildRecordTitle(record),
+          _formatAmount(record),
+          record.note ?? '',
+        ]);
+      }
+      final bytes = workbook.encode()!;
+      if (Platform.isWindows) {
+        final fileName =
+            '公账材料记录_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
+        final outputFile = await FilePicker.platform.saveFile(
+          dialogTitle: '请选择保存位置',
+          fileName: fileName,
+          allowedExtensions: ['xlsx'],
+          type: FileType.custom,
+        );
+        if (outputFile != null) {
+          final file = File(outputFile);
+          await file.writeAsBytes(bytes);
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('导出成功')));
+          }
+        }
+      } else {
+        final directory = await getApplicationDocumentsDirectory();
+        final filePath = p.join(
+          directory.path,
+          '公账材料记录_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx',
+        );
+        final file = File(filePath);
+        await file.writeAsBytes(bytes);
+        await Share.shareXFiles([XFile(filePath)], text: '公账材料记录');
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('导出失败，请重试')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _exporting = false;
+        });
+      }
+    }
   }
 }
 

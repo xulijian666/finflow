@@ -201,59 +201,41 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: const Color(0xFF1E1E1E),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E1E1E),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          '材料库存查询',
-          style: TextStyle(color: Colors.white, fontSize: 18),
-        ),
+        title: const Text('材料库存查询'),
         actions: [
           TextButton(
             onPressed: _isImporting ? null : _importOutStock,
-            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
             child: _isImporting
                 ? const SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
-                    ),
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Text('批量出库'),
           ),
           TextButton(
             onPressed: _isTemplateExporting ? null : _exportOutTemplate,
-            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
             child: _isTemplateExporting
                 ? const SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
-                    ),
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Text('导出批量出库模板'),
           ),
           TextButton(
             onPressed: _isExporting ? null : _exportInventory,
-            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
             child: _isExporting
                 ? const SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
-                    ),
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Text('导出库存'),
           ),
@@ -265,16 +247,11 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
             padding: const EdgeInsets.all(16.0),
             child: TextField(
               controller: _searchController,
-              style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
                 hintText: '搜索材料名称',
-                hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
-                prefixIcon: Icon(
-                  Icons.search,
-                  color: Colors.white.withOpacity(0.5),
-                ),
+                prefixIcon: const Icon(Icons.search),
                 filled: true,
-                fillColor: const Color(0xFF2B2B2B),
+                fillColor: colorScheme.surfaceContainerHighest,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
@@ -287,7 +264,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
           // 表头
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: const Color(0xFF2B2B2B),
+            color: colorScheme.surfaceContainerHighest,
             child: Row(
               children: [
                 SizedBox(
@@ -295,7 +272,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                   child: Text(
                     '序号',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.black54,
                       fontSize: 11,
                     ),
                   ),
@@ -305,7 +282,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                   child: Text(
                     '名称',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.black54,
                       fontSize: 11,
                     ),
                   ),
@@ -316,7 +293,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     '已购',
                     textAlign: TextAlign.right,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.black54,
                       fontSize: 11,
                     ),
                   ),
@@ -327,7 +304,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     '出库',
                     textAlign: TextAlign.right,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.black54,
                       fontSize: 11,
                     ),
                   ),
@@ -338,7 +315,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     '剩余',
                     textAlign: TextAlign.right,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.black54,
                       fontSize: 11,
                     ),
                   ),
@@ -354,7 +331,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                 ? Center(
                     child: Text(
                       '暂无库存记录',
-                      style: TextStyle(color: Colors.white.withOpacity(0.5)),
+                      style: const TextStyle(color: Colors.black45),
                     ),
                   )
                 : ListView.separated(
@@ -364,7 +341,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     ),
                     itemCount: _inventoryList.length,
                     separatorBuilder: (context, index) =>
-                        const Divider(color: Color(0xFF333333), height: 1),
+                        const Divider(color: Color(0xFFE6E6E6), height: 1),
                     itemBuilder: (context, index) {
                       final item = _inventoryList[index];
                       return _buildInventoryItem(index + 1, item);
@@ -377,11 +354,12 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
   }
 
   Widget _buildInventoryItem(int index, InventorySummary item) {
+    final colorScheme = Theme.of(context).colorScheme;
     final remainingColor = item.remainingQuantity < 0
         ? const Color(0xFFE57373)
         : item.remainingQuantity < item.purchasedQuantity * 0.1
         ? const Color(0xFF4CAF50)
-        : Colors.white;
+        : Colors.black87;
     return InkWell(
       onTap: () {
         Navigator.of(context).push(
@@ -399,7 +377,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               width: 40,
               child: Text(
                 '$index',
-                style: const TextStyle(color: Colors.white, fontSize: 12),
+                style: const TextStyle(color: Colors.black87, fontSize: 12),
               ),
             ),
             Expanded(
@@ -407,7 +385,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               child: Text(
                 item.materialName,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: Colors.black87,
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                 ),
@@ -415,14 +393,11 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
             ),
             Expanded(
               flex: 2,
-              child: _buildQuantityCell(
-                item.purchasedQuantity,
-                color: Colors.white,
-              ),
+              child: _buildQuantityCell(item.purchasedQuantity),
             ),
             Expanded(
               flex: 2,
-              child: _buildQuantityCell(item.outQuantity, color: Colors.white),
+              child: _buildQuantityCell(item.outQuantity),
             ),
             Expanded(
               flex: 2,
@@ -435,7 +410,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
             TextButton(
               onPressed: () => _showOutStockSheet(item),
               style: TextButton.styleFrom(
-                foregroundColor: Colors.white,
+                foregroundColor: colorScheme.primary,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(0, 28),
               ),
@@ -443,7 +418,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
             ),
             Icon(
               Icons.chevron_right,
-              color: Colors.white.withOpacity(0.3),
+              color: Colors.black26,
               size: 14,
             ),
           ],
@@ -458,7 +433,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
       child: Text(
         _formatCompactNumber(value),
         style: TextStyle(
-          color: color ?? Colors.white,
+          color: color ?? Colors.black87,
           fontSize: 12,
           fontWeight: bold ? FontWeight.bold : FontWeight.normal,
         ),
@@ -737,7 +712,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -757,13 +732,13 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                 children: [
                   const Text(
                     '材料出库',
-                    style: TextStyle(color: Colors.white, fontSize: 16),
+                    style: TextStyle(fontSize: 16),
                   ),
                   const SizedBox(height: 12),
                   Text(
                     item.materialName,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.8),
+                      color: Colors.black54,
                       fontSize: 14,
                     ),
                   ),
@@ -773,14 +748,10 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: '出库数量',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                      ),
                       filled: true,
-                      fillColor: const Color(0xFF2B2B2B),
+                      fillColor: const Color(0xFFF5F7F7),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none,
@@ -790,14 +761,10 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: noteController,
-                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: '出库备注（可选）',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                      ),
                       filled: true,
-                      fillColor: const Color(0xFF2B2B2B),
+                      fillColor: const Color(0xFFF5F7F7),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none,
@@ -810,9 +777,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                       Expanded(
                         child: Text(
                           DateFormat('yyyy-MM-dd').format(selectedDate),
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.7),
-                          ),
+                          style: const TextStyle(color: Colors.black54),
                         ),
                       ),
                       TextButton(
@@ -940,26 +905,17 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: const Color(0xFF1E1E1E),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E1E1E),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Text(
-          widget.materialName,
-          style: const TextStyle(color: Colors.white, fontSize: 18),
-        ),
+        title: Text(widget.materialName),
       ),
       body: Column(
         children: [
           // 明细表头
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            color: const Color(0xFF2B2B2B),
+            color: colorScheme.surfaceContainerHighest,
             child: Row(
               children: [
                 Expanded(
@@ -967,7 +923,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                   child: Text(
                     '时间',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.black54,
                       fontSize: 12,
                     ),
                   ),
@@ -978,7 +934,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                     '数量',
                     textAlign: TextAlign.right,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.black54,
                       fontSize: 12,
                     ),
                   ),
@@ -993,14 +949,14 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                 ? Center(
                     child: Text(
                       '无记录',
-                      style: TextStyle(color: Colors.white.withOpacity(0.5)),
+                      style: const TextStyle(color: Colors.black45),
                     ),
                   )
                 : ListView.separated(
                     padding: const EdgeInsets.all(16),
                     itemCount: _records.length,
                     separatorBuilder: (context, index) =>
-                        const Divider(color: Color(0xFF333333), height: 1),
+                        const Divider(color: Color(0xFFE6E6E6), height: 1),
                     itemBuilder: (context, index) {
                       final record = _records[index];
                       return _buildDetailItem(record);
@@ -1044,7 +1000,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                   Text(
                     dateStr,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.black54,
                       fontSize: 14,
                     ),
                   ),
@@ -1064,7 +1020,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                     Text(
                       '$notePrefix：$note',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
+                        color: Colors.black45,
                         fontSize: 12,
                       ),
                     ),
@@ -1091,7 +1047,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                     Text(
                       record.unit!,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
+                        color: Colors.black45,
                         fontSize: 10,
                       ),
                     ),
@@ -1114,7 +1070,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -1134,7 +1090,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                 children: [
                   const Text(
                     '编辑出库记录',
-                    style: TextStyle(color: Colors.white, fontSize: 16),
+                    style: TextStyle(fontSize: 16),
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -1142,14 +1098,10 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: '出库数量',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                      ),
                       filled: true,
-                      fillColor: const Color(0xFF2B2B2B),
+                      fillColor: const Color(0xFFF5F7F7),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none,
@@ -1159,14 +1111,10 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: noteController,
-                    style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
                       hintText: '出库备注（可选）',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                      ),
                       filled: true,
-                      fillColor: const Color(0xFF2B2B2B),
+                      fillColor: const Color(0xFFF5F7F7),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none,
@@ -1179,9 +1127,7 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                       Expanded(
                         child: Text(
                           DateFormat('yyyy-MM-dd').format(selectedDate),
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.7),
-                          ),
+                          style: const TextStyle(color: Colors.black54),
                         ),
                       ),
                       TextButton(
