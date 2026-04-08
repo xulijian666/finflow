@@ -44,6 +44,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
       final list = await RecordDatabase.instance.fetchInventorySummary(
         keyword: _searchController.text,
       );
+      list.sort((a, b) => a.remainingQuantity.compareTo(b.remainingQuantity));
       setState(() {
         _inventoryList = list;
         _isLoading = false;
@@ -342,28 +343,6 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
                     ),
                   ),
                 ),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    '总金额',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Text(
-                    '单价',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
                 const SizedBox(width: 56),
               ],
             ),
@@ -398,6 +377,11 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
   }
 
   Widget _buildInventoryItem(int index, InventorySummary item) {
+    final remainingColor = item.remainingQuantity < 0
+        ? const Color(0xFFE57373)
+        : item.remainingQuantity < item.purchasedQuantity * 0.1
+        ? const Color(0xFF4CAF50)
+        : Colors.white;
     return InkWell(
       onTap: () {
         Navigator.of(context).push(
@@ -444,29 +428,7 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
               flex: 2,
               child: _buildQuantityCell(
                 item.remainingQuantity,
-                color: item.remainingQuantity < 0
-                    ? const Color(0xFFE57373)
-                    : Colors.white,
-              ),
-            ),
-            Expanded(
-              flex: 3,
-              child: Text(
-                _formatCompactNumber(item.totalAmount),
-                textAlign: TextAlign.right,
-                style: const TextStyle(color: Colors.white, fontSize: 12),
-              ),
-            ),
-            Expanded(
-              flex: 2,
-              child: Text(
-                _formatCompactNumber(
-                  item.purchasedQuantity == 0
-                      ? 0
-                      : item.totalAmount / item.purchasedQuantity,
-                ),
-                textAlign: TextAlign.right,
-                style: const TextStyle(color: Colors.white, fontSize: 12),
+                color: remainingColor,
               ),
             ),
             const SizedBox(width: 8),
@@ -1021,28 +983,6 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                     ),
                   ),
                 ),
-                Expanded(
-                  flex: 2,
-                  child: Text(
-                    '金额',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Text(
-                    '单价',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -1076,10 +1016,6 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
     final date = DateTime.parse(record.createdAt);
     final dateStr = DateFormat('yyyy-MM-dd HH:mm').format(date);
     final isOutbound = record.isOutbound;
-    final amount = record.amount;
-    final unitPrice = record.quantity != 0 && amount != null
-        ? amount / record.quantity
-        : null;
     final note = (record.note ?? '').trim();
     final recordTypeLabel = record.isInitialization
         ? '初始化'
@@ -1161,32 +1097,6 @@ class _InventoryDetailsPageState extends State<InventoryDetailsPage> {
                     ),
                   ],
                 ],
-              ),
-            ),
-            Expanded(
-              flex: 2,
-              child: Text(
-                amount == null ? '-' : amount.toStringAsFixed(2),
-                textAlign: TextAlign.right,
-                style: TextStyle(
-                  color: amount == null
-                      ? Colors.white.withOpacity(0.4)
-                      : Colors.white,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-            Expanded(
-              flex: 2,
-              child: Text(
-                unitPrice == null ? '-' : unitPrice.toStringAsFixed(2),
-                textAlign: TextAlign.right,
-                style: TextStyle(
-                  color: unitPrice == null
-                      ? Colors.white.withOpacity(0.4)
-                      : Colors.white,
-                  fontSize: 14,
-                ),
               ),
             ),
           ],
