@@ -10,7 +10,6 @@ class TransactionRecord {
     required this.date,
     this.note,
     this.quantity,
-    this.reimbursementId,
   });
 
   final int? id;
@@ -22,7 +21,6 @@ class TransactionRecord {
   final DateTime date;
   final String? note;
   final double? quantity;
-  final int? reimbursementId;
 
   // 复制并替换指定字段
   TransactionRecord copyWith({
@@ -35,7 +33,6 @@ class TransactionRecord {
     DateTime? date,
     String? note,
     double? quantity,
-    int? reimbursementId,
   }) {
     return TransactionRecord(
       id: id ?? this.id,
@@ -47,7 +44,6 @@ class TransactionRecord {
       date: date ?? this.date,
       note: note ?? this.note,
       quantity: quantity ?? this.quantity,
-      reimbursementId: reimbursementId ?? this.reimbursementId,
     );
   }
 
@@ -63,7 +59,6 @@ class TransactionRecord {
       'date': date.toIso8601String(),
       'note': note,
       'quantity': quantity,
-      'reimbursement_id': reimbursementId,
     };
   }
 
@@ -79,7 +74,6 @@ class TransactionRecord {
       date: DateTime.parse(map['date'] as String),
       note: map['note'] as String?,
       quantity: (map['quantity'] as num?)?.toDouble(),
-      reimbursementId: map['reimbursement_id'] as int?,
     );
   }
 }
@@ -132,15 +126,26 @@ class Account {
 
 // 基础材料实体
 class BaseMaterial {
-  BaseMaterial({this.id, required this.name, required this.unit});
+  BaseMaterial({
+    this.id,
+    required this.name,
+    required this.unit,
+    this.initQuantity = 0,
+  });
 
   final int? id;
   final String name;
   final String unit;
+  final double initQuantity;
 
   // 转换为数据库存储 Map
   Map<String, Object?> toMap() {
-    return {'id': id, 'name': name, 'unit': unit};
+    return {
+      'id': id,
+      'name': name,
+      'unit': unit,
+      'init_quantity': initQuantity,
+    };
   }
 
   // 从数据库 Map 构建基础材料
@@ -149,6 +154,43 @@ class BaseMaterial {
       id: map['id'] as int?,
       name: map['name'] as String,
       unit: map['unit'] as String,
+      initQuantity: (map['init_quantity'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
+class ProjectMaterialRelation {
+  ProjectMaterialRelation({
+    this.id,
+    required this.projectName,
+    required this.gradeName,
+    required this.courseName,
+    required this.materialName,
+  });
+
+  final int? id;
+  final String projectName;
+  final String gradeName;
+  final String courseName;
+  final String materialName;
+
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'project_name': projectName,
+      'grade_name': gradeName,
+      'course_name': courseName,
+      'material_name': materialName,
+    };
+  }
+
+  static ProjectMaterialRelation fromMap(Map<String, Object?> map) {
+    return ProjectMaterialRelation(
+      id: map['id'] as int?,
+      projectName: map['project_name'] as String,
+      gradeName: map['grade_name'] as String,
+      courseName: map['course_name'] as String,
+      materialName: map['material_name'] as String,
     );
   }
 }

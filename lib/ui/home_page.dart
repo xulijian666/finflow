@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../data/record_database.dart';
 import '../data/transaction_record.dart';
 import 'extension_menu.dart';
+import 'line_account_page.dart';
 import 'record_form_sheet.dart';
 
 enum _RecordTimeFilterMode { all, month, year }
@@ -360,14 +361,18 @@ class _HomePageState extends State<HomePage>
       _loadingAccounts = true;
     });
     try {
-      final accounts = await RecordDatabase.instance.fetchAccounts();
+      final loadedAccounts = await RecordDatabase.instance.fetchAccounts();
       final balances = await RecordDatabase.instance.fetchAccountBalances();
       final fallbackId = RecordDatabase.instance.defaultAccountId;
       final currentId = _currentAccountId;
-      final currentExists = accounts.any((account) => account.id == currentId);
+      final currentExists = loadedAccounts.any(
+        (account) => account.id == currentId,
+      );
       if (!mounted) {
         return;
       }
+      final lineAccountId = _findLineAccountId(loadedAccounts);
+      final accounts = _sortAccounts(loadedAccounts, fallbackId, lineAccountId);
       final nextAccountId = currentExists ? currentId : fallbackId;
       if (_currentAccountId != nextAccountId && nextAccountId != null) {
         _saveSelectedAccount(nextAccountId);
@@ -401,7 +406,6 @@ class _HomePageState extends State<HomePage>
           RecordDatabase.instance.defaultBillId,
       defaultAccountId:
           record?.accountId ??
-          _currentAccountId ??
           _defaultAccountId ??
           RecordDatabase.instance.defaultAccountId,
       record: record,
@@ -855,7 +859,7 @@ class _HomePageState extends State<HomePage>
 
   Future<void> _confirmDeleteAccount(Account account) async {
     // 删除账户并清理记录
-    if (account.id == _defaultAccountId) {
+    if (account.id == _defaultAccountId || _isLineAccount(account)) {
       return;
     }
     final confirmed = await showDialog<bool>(
@@ -890,6 +894,48 @@ class _HomePageState extends State<HomePage>
     } catch (error) {
       _showMessage('删除失败，请重试');
     }
+  }
+
+  int? _findLineAccountId(List<Account> accounts) {
+    for (final account in accounts) {
+      if (_isLineAccount(account)) {
+        return account.id;
+      }
+    }
+    return null;
+  }
+
+  List<Account> _sortAccounts(
+    List<Account> accounts,
+    int defaultAccountId,
+    int? lineAccountId,
+  ) {
+    final sorted = [...accounts];
+    sorted.sort((a, b) {
+      final rankA = _accountRank(a.id, defaultAccountId, lineAccountId);
+      final rankB = _accountRank(b.id, defaultAccountId, lineAccountId);
+      if (rankA != rankB) {
+        return rankA.compareTo(rankB);
+      }
+      final aId = a.id ?? 0;
+      final bId = b.id ?? 0;
+      return aId.compareTo(bId);
+    });
+    return sorted;
+  }
+
+  int _accountRank(int? id, int defaultAccountId, int? lineAccountId) {
+    if (id == defaultAccountId) {
+      return 0;
+    }
+    if (lineAccountId != null && id == lineAccountId) {
+      return 1;
+    }
+    return 2;
+  }
+
+  bool _isLineAccount(Account account) {
+    return account.name.trim() == RecordDatabase.lineAccountName;
   }
 
   String _currentBillName() {
@@ -1451,11 +1497,6 @@ class _HomePageState extends State<HomePage>
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
-            TextButton.icon(
-              onPressed: _createAccount,
-              icon: const Icon(Icons.add),
-              label: const Text('新增'),
-            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -1471,16 +1512,29 @@ class _HomePageState extends State<HomePage>
               children: List.generate(_accounts.length, (index) {
                 final account = _accounts[index];
                 final isDefault = account.id == _defaultAccountId;
-                final isSelected = account.id == _currentAccountId;
+                final isLineAccount = _isLineAccount(account);
                 final isEditing = account.id == _editingAccountId;
                 final balance = _accountBalances[account.id ?? 0] ?? 0;
                 return InkWell(
-                  onTap: isEditing ? null : () => _selectAccount(account),
-                  onLongPress: () {
-                    setState(() {
-                      _editingAccountId = account.id;
-                    });
-                  },
+                  onTap: isEditing
+                      ? null
+                      : () {
+                          if (isLineAccount && account.id != null) {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    LineAccountPage(accountId: account.id!),
+                              ),
+                            );
+                          }
+                        },
+                  onLongPress: isLineAccount
+                      ? null
+                      : () {
+                          setState(() {
+                            _editingAccountId = account.id;
+                          });
+                        },
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
@@ -1523,15 +1577,6 @@ class _HomePageState extends State<HomePage>
                               ],
                             ]
                           : [
-                              Icon(
-                                isSelected
-                                    ? Icons.check_circle
-                                    : Icons.radio_button_off,
-                                color: isSelected
-                                    ? const Color(0xFF1B7F5A)
-                                    : Colors.black54,
-                              ),
-                              const SizedBox(width: 8),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1545,9 +1590,25 @@ class _HomePageState extends State<HomePage>
                                             .labelMedium
                                             ?.copyWith(color: Colors.black54),
                                       ),
+                                    if (isLineAccount)
+                                      Text(
+                                        '固定账户',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelMedium
+                                            ?.copyWith(color: Colors.black54),
+                                      ),
                                   ],
                                 ),
                               ),
+                              if (isLineAccount)
+                                const Padding(
+                                  padding: EdgeInsets.only(right: 8),
+                                  child: Icon(
+                                    Icons.chevron_right,
+                                    color: Colors.black45,
+                                  ),
+                                ),
                               Text(
                                 _formatPlainAmount(balance),
                                 style: TextStyle(

@@ -10,7 +10,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/record_database.dart';
-import '../data/transaction_record.dart';
 
 class MaterialInventoryInitPage extends StatefulWidget {
   const MaterialInventoryInitPage({super.key});
@@ -21,121 +20,167 @@ class MaterialInventoryInitPage extends StatefulWidget {
 }
 
 class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _quantityController = TextEditingController();
-  final TextEditingController _noteController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
 
-  List<BaseMaterial> _baseMaterials = [];
-  List<InventoryInitRecord> _initRecords = [];
-  Map<String, String> _materialUnitMap = {};
+  List<InventoryInitMaterialRow> _rows = [];
   bool _loading = true;
-  bool _initRecordsLoading = true;
-  bool _isSubmitting = false;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  int _offset = 0;
+  static const int _pageSize = 50;
+  String _keyword = '';
   bool _isImporting = false;
   bool _isTemplateExporting = false;
-  DateTime _selectedDate = DateTime.now();
+  bool _isExporting = false;
 
   @override
   void initState() {
     super.initState();
-    _loadBaseMaterials();
+    _scrollController.addListener(_onScroll);
+    _initPage();
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _quantityController.dispose();
-    _noteController.dispose();
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadBaseMaterials() async {
-    setState(() => _loading = true);
+  Future<void> _initPage() async {
     try {
-      final list = await RecordDatabase.instance.fetchBaseMaterials();
-      setState(() {
-        _baseMaterials = list;
-        _materialUnitMap = {for (final item in list) item.name: item.unit};
-        _loading = false;
-      });
-      await _loadInitRecords();
+      // 先归并历史重复初始化记录，再补齐基础材料缺省初始化项
+      await RecordDatabase.instance.ensureInitOneToOne();
+      await RecordDatabase.instance.syncInitRecordsWithBaseMaterials();
+      await _loadRows(showLoading: true, reset: true);
     } catch (_) {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
+      _showMessage('初始化数据加载失败，请重试');
     }
   }
 
-  Future<void> _loadInitRecords() async {
-    if (mounted) {
+  Future<void> _loadRows({
+    required bool showLoading,
+    required bool reset,
+  }) async {
+    if (reset) {
+      _offset = 0;
+      _hasMore = true;
+      _loadingMore = false;
+    }
+    if (showLoading) {
       setState(() {
-        _initRecordsLoading = true;
+        _loading = true;
+      });
+    } else if (!reset) {
+      setState(() {
+        _loadingMore = true;
       });
     }
     try {
-      final list = await RecordDatabase.instance.fetchInitRecords();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _initRecords = list;
-        _initRecordsLoading = false;
-      });
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _initRecordsLoading = false;
-      });
-    }
-  }
-
-  Future<void> _submitManualInit() async {
-    if (_isSubmitting) {
-      return;
-    }
-    final name = _nameController.text.trim();
-    final quantity = double.tryParse(_quantityController.text.trim());
-    if (name.isEmpty) {
-      _showMessage('请输入材料名称');
-      return;
-    }
-    if (!_materialUnitMap.containsKey(name)) {
-      _showMessage('材料名称不在基础材料中，不允许初始化');
-      return;
-    }
-    if (quantity == null || quantity <= 0) {
-      _showMessage('请输入有效的初始化数量');
-      return;
-    }
-    setState(() {
-      _isSubmitting = true;
-    });
-    try {
-      await RecordDatabase.instance.insertInitRecord(
-        materialName: name,
-        quantity: quantity,
-        unit: _materialUnitMap[name],
-        note: _noteController.text.trim().isEmpty
-            ? null
-            : _noteController.text.trim(),
-        initDate: _selectedDate,
+      final list = await RecordDatabase.instance.fetchInitMaterialRows(
+        keyword: _keyword,
+        limit: _pageSize,
+        offset: _offset,
       );
-      _showMessage('初始化成功');
-      _quantityController.clear();
-      _noteController.clear();
-      await _loadInitRecords();
-    } catch (_) {
-      _showMessage('初始化失败，请重试');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
+      if (!mounted) {
+        return;
       }
+      setState(() {
+        if (reset) {
+          _rows = list;
+        } else {
+          _rows.addAll(list);
+        }
+        _offset += list.length;
+        _hasMore = list.length == _pageSize;
+        _loading = false;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _loadingMore = false;
+      });
+      _showMessage('加载失败，请重试');
+    }
+  }
+
+  void _onScroll() {
+    if (_loading || _loadingMore || !_hasMore) {
+      return;
+    }
+    if (_scrollController.position.extentAfter < 200) {
+      _loadRows(showLoading: false, reset: false);
+    }
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {
+      _keyword = value.trim();
+    });
+    _loadRows(showLoading: false, reset: true);
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {
+      _keyword = '';
+    });
+    _loadRows(showLoading: false, reset: true);
+  }
+
+  Future<void> _editQuantity(InventoryInitMaterialRow row) async {
+    final controller = TextEditingController(
+      text: _formatCompactNumber(row.quantity),
+    );
+    final value = await showDialog<double>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('修改初始化数量'),
+          content: TextField(
+            controller: controller,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              hintText: '${row.materialName} 初始化数量',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final parsed = double.tryParse(controller.text.trim());
+                Navigator.of(context).pop(parsed);
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+    if (value == null || value < 0) {
+      if (value != null && value < 0) {
+        _showMessage('初始化数量不能小于0');
+      }
+      return;
+    }
+    try {
+      await RecordDatabase.instance.upsertInitQuantity(
+        materialName: row.materialName,
+        unit: row.unit,
+        quantity: value,
+      );
+      _showMessage('已更新');
+      await _loadRows(showLoading: false, reset: true);
+    } catch (_) {
+      _showMessage('更新失败，请重试');
     }
   }
 
@@ -172,58 +217,45 @@ class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
         _showMessage('模板缺少材料名称或初始化数量列');
         return;
       }
-      final noteIndex = headerIndex['初始化备注'] ?? headerIndex['备注'];
-      final dateIndex = headerIndex['初始化日期'] ?? headerIndex['日期'];
-      final detailList = <Map<String, Object?>>[];
+      final materialList = await RecordDatabase.instance.fetchBaseMaterials();
+      final materialUnitMap = {
+        for (final item in materialList) item.name.trim(): item.unit,
+      };
       final missingNames = <String>{};
+      final overwriteMap = <String, double>{};
       for (var i = 1; i < sheet.rows.length; i++) {
         final row = sheet.rows[i];
         final name = _cellString(row, nameIndex);
         if (name.isEmpty) {
           continue;
         }
-        if (!_materialUnitMap.containsKey(name)) {
+        if (!materialUnitMap.containsKey(name)) {
           missingNames.add(name);
           continue;
         }
         final quantity = _cellDouble(row, quantityIndex);
-        if (quantity == null || quantity <= 0) {
-          continue;
-        }
-        final note = noteIndex == null ? '' : _cellString(row, noteIndex);
-        final date = dateIndex == null ? null : _cellDate(row, dateIndex);
-        detailList.add({
-          'name': name,
-          'quantity': quantity,
-          'note': note,
-          'date': date,
-        });
+        overwriteMap[name] = quantity == null || quantity < 0 ? 0 : quantity;
       }
       if (missingNames.isNotEmpty) {
         await _showBlockDialog('导入失败', '以下材料不在基础材料中：${missingNames.join('、')}');
         return;
       }
-      if (detailList.isEmpty) {
+      if (overwriteMap.isEmpty) {
         _showMessage('没有可导入的数据');
         return;
       }
-      var inserted = 0;
-      for (final detail in detailList) {
-        final name = detail['name'] as String;
-        final quantity = detail['quantity'] as double;
-        final note = detail['note'] as String;
-        final date = detail['date'] as DateTime? ?? DateTime.now();
-        await RecordDatabase.instance.insertInitRecord(
-          materialName: name,
-          quantity: quantity,
-          unit: _materialUnitMap[name],
-          note: note.isEmpty ? null : note,
-          initDate: date,
-        );
-        inserted += 1;
-      }
-      _showMessage('导入完成：成功 $inserted 条');
-      await _loadInitRecords();
+      final rows = overwriteMap.entries
+          .map(
+            (entry) => InventoryInitMaterialRow(
+              materialName: entry.key,
+              unit: materialUnitMap[entry.key] ?? '',
+              quantity: entry.value,
+            ),
+          )
+          .toList();
+      await RecordDatabase.instance.importInitQuantitiesOverwrite(rows);
+      _showMessage('导入完成：覆盖 ${rows.length} 条');
+      await _loadRows(showLoading: false, reset: true);
     } catch (_) {
       _showMessage('导入失败，请重试');
     } finally {
@@ -235,7 +267,7 @@ class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
     }
   }
 
-  Future<void> _exportImportTemplate() async {
+  Future<void> _downloadImportTemplate() async {
     if (_isTemplateExporting) {
       return;
     }
@@ -243,16 +275,21 @@ class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
       _isTemplateExporting = true;
     });
     try {
+      final list = await RecordDatabase.instance.fetchInitMaterialRows();
       final workbook = Excel.createExcel();
       final sheet = workbook['Sheet1'];
-      sheet.appendRow(['材料名称', '初始化数量', '初始化日期', '初始化备注']);
-      for (final item in _baseMaterials) {
-        sheet.appendRow([item.name, '', '', '']);
+      sheet.appendRow(['材料名称', '单位', '初始化数量']);
+      for (final item in list) {
+        sheet.appendRow([
+          item.materialName,
+          item.unit,
+          _formatCompactNumber(item.quantity),
+        ]);
       }
       final bytes = workbook.encode()!;
       if (Platform.isWindows) {
         final fileName =
-            '库存初始化模板_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
+            '库存初始化导入模板_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
         final outputFile = await FilePicker.platform.saveFile(
           dialogTitle: '请选择保存位置',
           fileName: fileName,
@@ -268,11 +305,11 @@ class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
         final directory = await getApplicationDocumentsDirectory();
         final filePath = p.join(
           directory.path,
-          '库存初始化模板_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx',
+          '库存初始化导入模板_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx',
         );
         final file = File(filePath);
         await file.writeAsBytes(bytes);
-        await Share.shareXFiles([XFile(filePath)], text: '库存初始化模板');
+        await Share.shareXFiles([XFile(filePath)], text: '库存初始化导入模板');
       }
     } catch (_) {
       _showMessage('模板导出失败，请重试');
@@ -280,6 +317,66 @@ class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
       if (mounted) {
         setState(() {
           _isTemplateExporting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _exportInitData() async {
+    if (_isExporting) {
+      return;
+    }
+    setState(() {
+      _isExporting = true;
+    });
+    try {
+      final list = await RecordDatabase.instance.fetchInitMaterialRows();
+      final filtered = list.where((e) => e.quantity > 0).toList();
+      if (filtered.isEmpty) {
+        _showMessage('暂无初始化数量大于0的数据');
+        return;
+      }
+      final workbook = Excel.createExcel();
+      final sheet = workbook['Sheet1'];
+      sheet.appendRow(['材料名称', '单位', '初始化数量']);
+      for (final item in filtered) {
+        sheet.appendRow([
+          item.materialName,
+          item.unit,
+          _formatCompactNumber(item.quantity),
+        ]);
+      }
+      final bytes = workbook.encode()!;
+      if (Platform.isWindows) {
+        final fileName =
+            '库存初始化导出_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
+        final outputFile = await FilePicker.platform.saveFile(
+          dialogTitle: '请选择保存位置',
+          fileName: fileName,
+          allowedExtensions: ['xlsx'],
+          type: FileType.custom,
+        );
+        if (outputFile != null) {
+          final file = File(outputFile);
+          await file.writeAsBytes(bytes);
+          _showMessage('导出成功');
+        }
+      } else {
+        final directory = await getApplicationDocumentsDirectory();
+        final filePath = p.join(
+          directory.path,
+          '库存初始化导出_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx',
+        );
+        final file = File(filePath);
+        await file.writeAsBytes(bytes);
+        await Share.shareXFiles([XFile(filePath)], text: '库存初始化导出');
+      }
+    } catch (_) {
+      _showMessage('导出失败，请重试');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
         });
       }
     }
@@ -330,35 +427,6 @@ class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
     return double.tryParse(value.toString().trim());
   }
 
-  DateTime? _cellDate(List<Data?> row, int index) {
-    if (index < 0 || index >= row.length) {
-      return null;
-    }
-    final value = row[index]?.value;
-    if (value is DateTime) {
-      return value;
-    }
-    if (value == null) {
-      return null;
-    }
-    final text = value.toString().trim();
-    if (text.isEmpty) {
-      return null;
-    }
-    if (text.contains('/')) {
-      final parts = text.split('/');
-      if (parts.length >= 3) {
-        final year = int.tryParse(parts[0].trim());
-        final month = int.tryParse(parts[1].trim());
-        final day = int.tryParse(parts[2].trim());
-        if (year != null && month != null && day != null) {
-          return DateTime(year, month, day);
-        }
-      }
-    }
-    return DateTime.tryParse(text);
-  }
-
   void _showMessage(String message) {
     if (!mounted) {
       return;
@@ -389,36 +457,6 @@ class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
     );
   }
 
-  Future<void> _deleteInitRecord(InventoryInitRecord record) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('删除初始化记录'),
-          content: Text(
-            '确定删除 ${record.materialName} 的初始化记录（数量：${_formatCompactNumber(record.quantity)}）吗？',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('删除'),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed != true) {
-      return;
-    }
-    await RecordDatabase.instance.deleteInitRecord(record.id!);
-    _showMessage('已删除初始化记录');
-    await _loadInitRecords();
-  }
-
   String _formatCompactNumber(double value) {
     if (value % 1 == 0) {
       return value.toInt().toString();
@@ -431,292 +469,157 @@ class _MaterialInventoryInitPageState extends State<MaterialInventoryInitPage> {
 
   @override
   Widget build(BuildContext context) {
-    final matchedMaterials = _baseMaterials.where((item) {
-      final keyword = _searchController.text.trim();
-      if (keyword.isEmpty) {
-        return true;
-      }
-      return item.name.contains(keyword);
-    }).toList();
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: const Color(0xFF1E1E1E),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E1E1E),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          '材料库存初始化',
-          style: TextStyle(color: Colors.white, fontSize: 18),
-        ),
+        title: const Text('材料库存初始化'),
         actions: [
           TextButton(
             onPressed: _isImporting ? null : _importInitByExcel,
-            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
             child: _isImporting
                 ? const SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                      color: Colors.white,
                       strokeWidth: 2,
                     ),
                   )
                 : const Text('批量导入'),
           ),
           TextButton(
-            onPressed: _isTemplateExporting ? null : _exportImportTemplate,
-            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            onPressed: _isTemplateExporting ? null : _downloadImportTemplate,
+            style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
             child: _isTemplateExporting
                 ? const SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                      color: Colors.white,
                       strokeWidth: 2,
                     ),
                   )
-                : const Text('导出模板'),
+                : const Text('导入模板下载'),
+          ),
+          TextButton(
+            onPressed: _isExporting ? null : _exportInitData,
+            style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
+            child: _isExporting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                    ),
+                  )
+                : const Text('导出'),
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            TextField(
+              controller: _searchController,
+              onChanged: _onSearchChanged,
+              decoration: InputDecoration(
+                hintText: '搜索材料名称',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _keyword.isEmpty
+                    ? null
+                    : IconButton(
+                        onPressed: _clearSearch,
+                        icon: const Icon(Icons.close),
+                      ),
+                filled: true,
+                fillColor: colorScheme.surfaceContainerHighest,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
                 children: [
-                  TextField(
-                    controller: _nameController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: '材料名称（必须存在于基础材料）',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                      ),
-                      filled: true,
-                      fillColor: const Color(0xFF2B2B2B),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _quantityController,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: '初始化数量',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                      ),
-                      filled: true,
-                      fillColor: const Color(0xFF2B2B2B),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _noteController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: '初始化备注（可选）',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                      ),
-                      filled: true,
-                      fillColor: const Color(0xFF2B2B2B),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          DateFormat('yyyy-MM-dd').format(_selectedDate),
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.7),
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: _selectedDate,
-                            firstDate: DateTime(2000),
-                            lastDate: DateTime.now(),
-                          );
-                          if (picked != null) {
-                            setState(() {
-                              _selectedDate = picked;
-                            });
-                          }
-                        },
-                        child: const Text('选择日期'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: _isSubmitting ? null : _submitManualInit,
-                      child: _isSubmitting
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text('手动新增初始化库存'),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    '初始化记录（可删除）',
-                    style: TextStyle(color: Colors.white.withOpacity(0.9)),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_initRecordsLoading)
-                    const Center(child: CircularProgressIndicator())
-                  else if (_initRecords.isEmpty)
-                    Text(
-                      '暂无初始化记录',
-                      style: TextStyle(color: Colors.white.withOpacity(0.5)),
-                    )
-                  else
-                    Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF2B2B2B),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        children: [
-                          for (var i = 0; i < _initRecords.length; i++)
-                            ListTile(
-                              dense: true,
-                              title: Text(
-                                _initRecords[i].materialName,
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                              subtitle: Text(
-                                '${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.parse(_initRecords[i].createdAt))}'
-                                '${(_initRecords[i].note ?? '').trim().isEmpty ? '' : '\n备注：${_initRecords[i].note!.trim()}'}',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.6),
-                                ),
-                              ),
-                              isThreeLine: (_initRecords[i].note ?? '')
-                                  .trim()
-                                  .isNotEmpty,
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    '+${_formatCompactNumber(_initRecords[i].quantity)}${_initRecords[i].unit ?? ''}',
-                                    style: const TextStyle(
-                                      color: Color(0xFF4CAF50),
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    onPressed: () =>
-                                        _deleteInitRecord(_initRecords[i]),
-                                    icon: const Icon(
-                                      Icons.delete_outline,
-                                      color: Color(0xFFE57373),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  const SizedBox(height: 24),
-                  TextField(
-                    controller: _searchController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: '搜索基础材料',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                      ),
-                      prefixIcon: Icon(
-                        Icons.search,
-                        color: Colors.white.withOpacity(0.5),
-                      ),
-                      filled: true,
-                      fillColor: const Color(0xFF2B2B2B),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    '基础材料（${matchedMaterials.length}/${_baseMaterials.length}）',
-                    style: TextStyle(color: Colors.white.withOpacity(0.7)),
-                  ),
-                  const SizedBox(height: 8),
-                  if (matchedMaterials.isEmpty)
-                    Text(
-                      '无匹配材料',
-                      style: TextStyle(color: Colors.white.withOpacity(0.5)),
-                    )
-                  else
-                    Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF2B2B2B),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        children: [
-                          for (var i = 0; i < matchedMaterials.length; i++)
-                            ListTile(
-                              dense: true,
-                              title: Text(
-                                matchedMaterials[i].name,
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                              subtitle: Text(
-                                '单位：${matchedMaterials[i].unit}',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.6),
-                                ),
-                              ),
-                              onTap: () {
-                                setState(() {
-                                  _nameController.text =
-                                      matchedMaterials[i].name;
-                                });
-                              },
-                            ),
-                        ],
-                      ),
-                    ),
+                  Expanded(flex: 4, child: Text('材料名称')),
+                  Expanded(flex: 2, child: Text('单位')),
+                  Expanded(flex: 2, child: Text('初始化数量')),
+                  SizedBox(width: 56),
                 ],
               ),
             ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _rows.isEmpty
+                  ? const Center(child: Text('暂无材料数据'))
+                  : ListView.separated(
+                      controller: _scrollController,
+                      itemCount: _rows.length + (_loadingMore ? 1 : 0),
+                      separatorBuilder: (_, __) => const SizedBox(height: 6),
+                      itemBuilder: (context, index) {
+                        if (index >= _rows.length) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        }
+                        final row = _rows[index];
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: colorScheme.surface,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                flex: 4,
+                                child: Text(
+                                  row.materialName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Text(
+                                  row.unit,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Text(_formatCompactNumber(row.quantity)),
+                              ),
+                              SizedBox(
+                                width: 56,
+                                child: TextButton(
+                                  onPressed: () => _editQuantity(row),
+                                  child: const Text('修改'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

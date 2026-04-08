@@ -3,9 +3,8 @@ import 'package:flutter/material.dart';
 import 'material_inventory_page.dart';
 import 'material_inventory_init_page.dart';
 import 'base_materials_page.dart';
-import 'reimbursement_page.dart';
 import 'course_outbound_import_page.dart';
-import 'zhengda_outbound_export_page.dart';
+import 'project_material_relation_page.dart';
 
 // 扩展功能入口页
 class ExtensionMenuPage extends StatelessWidget {
@@ -36,22 +35,16 @@ class ExtensionMenuPage extends StatelessWidget {
         builder: (context) => const MaterialInventoryInitPage(),
       ),
       ExtensionMenuItem(
-        title: '报销管理',
-        subtitle: '管理报销单据',
-        icon: Icons.receipt_long_outlined,
-        builder: (context) => const ReimbursementPage(),
-      ),
-      ExtensionMenuItem(
-        title: '正大出库导出',
-        subtitle: '导入源数据并生成出库表格',
-        icon: Icons.calculate_outlined,
-        builder: (context) => const ZhengdaOutboundExportPage(),
-      ),
-      ExtensionMenuItem(
         title: '课程出库导出',
         subtitle: '按导入数据动态年级计算并导出',
         icon: Icons.table_chart_outlined,
         builder: (context) => const CourseOutboundImportPage(),
+      ),
+      ExtensionMenuItem(
+        title: '项目材料关系维护',
+        subtitle: '维护项目/年级/课程与基础材料关系',
+        icon: Icons.account_tree_outlined,
+        builder: (context) => const ProjectMaterialRelationPage(),
       ),
       const ExtensionMenuItem(
         title: '账单数据导出',

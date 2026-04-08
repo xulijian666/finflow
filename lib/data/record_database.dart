@@ -84,44 +84,16 @@ class InventorySummary {
   }
 }
 
-class InventoryInitRecord {
-  InventoryInitRecord({
-    this.id,
+class InventoryInitMaterialRow {
+  InventoryInitMaterialRow({
     required this.materialName,
+    required this.unit,
     required this.quantity,
-    this.unit,
-    this.note,
-    required this.createdAt,
   });
 
-  final int? id;
   final String materialName;
+  final String unit;
   final double quantity;
-  final String? unit;
-  final String? note;
-  final String createdAt;
-
-  Map<String, Object?> toMap() {
-    return {
-      'id': id,
-      'material_name': materialName,
-      'quantity': quantity,
-      'unit': unit,
-      'note': note,
-      'created_at': createdAt,
-    };
-  }
-
-  static InventoryInitRecord fromMap(Map<String, Object?> map) {
-    return InventoryInitRecord(
-      id: map['id'] as int?,
-      materialName: map['material_name'] as String,
-      quantity: (map['quantity'] as num).toDouble(),
-      unit: map['unit'] as String?,
-      note: map['note'] as String?,
-      createdAt: map['created_at'] as String,
-    );
-  }
 }
 
 class InventoryOutRecord {
@@ -203,9 +175,11 @@ class RecordDatabase {
   static const String _accountTableName = 'accounts';
   static const String _baseMaterialTableName = 'base_materials';
   static const String _inventoryTableName = 'inventory_records';
-  static const String _inventoryInitTableName = 'inventory_init_records';
   static const String _inventoryOutTableName = 'inventory_out_records';
-  static const String _reimbursementTableName = 'reimbursements';
+  static const String _projectMaterialRelationTableName =
+      'project_material_relations';
+  static const String defaultAccountName = '默认账户';
+  static const String lineAccountName = '公账材料';
 
   Database? _database;
   int? _defaultBillId;
@@ -284,15 +258,15 @@ class RecordDatabase {
         category TEXT NOT NULL,
         date TEXT NOT NULL,
         note TEXT,
-        quantity REAL,
-        reimbursement_id INTEGER
+        quantity REAL
       )
     ''');
     await db.execute('''
       CREATE TABLE IF NOT EXISTS $_baseMaterialTableName (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        unit TEXT NOT NULL
+        unit TEXT NOT NULL,
+        init_quantity REAL NOT NULL DEFAULT 0
       )
     ''');
     await db.execute('''
@@ -302,16 +276,6 @@ class RecordDatabase {
         quantity REAL NOT NULL,
         unit TEXT,
         record_id INTEGER,
-        created_at TEXT NOT NULL
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS $_inventoryInitTableName (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        material_name TEXT NOT NULL,
-        quantity REAL NOT NULL,
-        unit TEXT,
-        note TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -326,12 +290,13 @@ class RecordDatabase {
       )
     ''');
     await db.execute('''
-      CREATE TABLE IF NOT EXISTS $_reimbursementTableName (
+      CREATE TABLE IF NOT EXISTS $_projectMaterialRelationTableName (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        total_amount REAL NOT NULL,
-        date TEXT NOT NULL,
-        note TEXT,
-        created_at TEXT NOT NULL
+        project_name TEXT NOT NULL,
+        grade_name TEXT NOT NULL,
+        course_name TEXT NOT NULL,
+        material_name TEXT NOT NULL,
+        UNIQUE(project_name, grade_name, course_name, material_name)
       )
     ''');
   }
@@ -352,7 +317,14 @@ class RecordDatabase {
       'INTEGER NOT NULL DEFAULT 1',
     );
     await _ensureColumn(db, _tableName, 'quantity', 'REAL');
-    await _ensureColumn(db, _tableName, 'reimbursement_id', 'INTEGER');
+    await _ensureColumn(
+      db,
+      _baseMaterialTableName,
+      'init_quantity',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await db.execute('DROP TABLE IF EXISTS inventory_init_records');
+    await db.execute('DROP TABLE IF EXISTS reimbursements');
   }
 
   Future<void> _ensureColumn(
@@ -370,6 +342,22 @@ class RecordDatabase {
 
   Future<void> ensureDefaultBillAndAccount() async {
     final db = await database;
+    await _ensureColumn(
+      db,
+      _baseMaterialTableName,
+      'init_quantity',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_projectMaterialRelationTableName (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name TEXT NOT NULL,
+        grade_name TEXT NOT NULL,
+        course_name TEXT NOT NULL,
+        material_name TEXT NOT NULL,
+        UNIQUE(project_name, grade_name, course_name, material_name)
+      )
+    ''');
     final bills = await db.query(_billTableName, orderBy: 'id ASC');
     if (bills.isEmpty) {
       final id = await db.insert(_billTableName, {
@@ -396,7 +384,7 @@ class RecordDatabase {
     final accounts = await db.query(_accountTableName, orderBy: 'id ASC');
     if (accounts.isEmpty) {
       final id = await db.insert(_accountTableName, {
-        'name': '默认账户',
+        'name': defaultAccountName,
         'is_default': 1,
       });
       _defaultAccountId = id;
@@ -415,6 +403,22 @@ class RecordDatabase {
         );
       }
     }
+    final refreshedAccounts = await db.query(
+      _accountTableName,
+      orderBy: 'id ASC',
+    );
+    final hasLineAccount = refreshedAccounts.any(
+      (item) => (item['name'] as String?)?.trim() == lineAccountName,
+    );
+    if (!hasLineAccount) {
+      await db.insert(_accountTableName, {
+        'name': lineAccountName,
+        'is_default': 0,
+      });
+    }
+    await _ensureBaseMaterialNameUniqueInternal(db);
+    await db.execute('DROP TABLE IF EXISTS inventory_init_records');
+    await db.execute('DROP TABLE IF EXISTS reimbursements');
   }
 
   Future<List<Bill>> fetchBills() async {
@@ -516,6 +520,18 @@ class RecordDatabase {
 
   Future<void> updateAccountName(int accountId, String name) async {
     final db = await database;
+    final account = await db.query(
+      _accountTableName,
+      where: 'id = ?',
+      whereArgs: [accountId],
+      limit: 1,
+    );
+    final accountName = account.isEmpty
+        ? ''
+        : (account.first['name'] as String? ?? '').trim();
+    if (accountName == lineAccountName) {
+      return;
+    }
     await db.update(
       _accountTableName,
       {'name': name},
@@ -526,6 +542,18 @@ class RecordDatabase {
 
   Future<void> deleteAccount(int accountId) async {
     final db = await database;
+    final account = await db.query(
+      _accountTableName,
+      where: 'id = ?',
+      whereArgs: [accountId],
+      limit: 1,
+    );
+    final accountName = account.isEmpty
+        ? ''
+        : (account.first['name'] as String? ?? '').trim();
+    if (accountName == lineAccountName) {
+      return;
+    }
     await db.update(
       _tableName,
       {'account_id': defaultAccountId},
@@ -642,6 +670,17 @@ class RecordDatabase {
     return maps.map(TransactionRecord.fromMap).toList();
   }
 
+  Future<List<TransactionRecord>> fetchRecordsByAccount(int accountId) async {
+    final db = await database;
+    final maps = await db.query(
+      _tableName,
+      where: 'account_id = ?',
+      whereArgs: [accountId],
+      orderBy: 'date DESC, id DESC',
+    );
+    return maps.map(TransactionRecord.fromMap).toList();
+  }
+
   Future<int> insertRecord(TransactionRecord record) async {
     final db = await database;
     return db.insert(_tableName, record.toMap());
@@ -753,6 +792,83 @@ class RecordDatabase {
     return BaseMaterial.fromMap(maps.first);
   }
 
+  Future<List<ProjectMaterialRelation>> fetchProjectMaterialRelations({
+    String? keyword,
+    String searchField = 'all',
+  }) async {
+    final db = await database;
+    final normalized = keyword?.trim() ?? '';
+    if (normalized.isEmpty) {
+      final maps = await db.query(
+        _projectMaterialRelationTableName,
+        orderBy:
+            'project_name ASC, grade_name ASC, course_name ASC, material_name ASC',
+      );
+      return maps.map(ProjectMaterialRelation.fromMap).toList();
+    }
+    final like = '%$normalized%';
+    late final String whereSql;
+    late final List<Object?> whereArgs;
+    switch (searchField) {
+      case 'project':
+        whereSql = 'project_name LIKE ?';
+        whereArgs = [like];
+        break;
+      case 'grade':
+        whereSql = 'grade_name LIKE ?';
+        whereArgs = [like];
+        break;
+      case 'course':
+        whereSql = 'course_name LIKE ?';
+        whereArgs = [like];
+        break;
+      case 'material':
+        whereSql = 'material_name LIKE ?';
+        whereArgs = [like];
+        break;
+      default:
+        whereSql =
+            '(project_name LIKE ? OR grade_name LIKE ? OR course_name LIKE ? OR material_name LIKE ?)';
+        whereArgs = [like, like, like, like];
+        break;
+    }
+    final maps = await db.query(
+      _projectMaterialRelationTableName,
+      where: whereSql,
+      whereArgs: whereArgs,
+      orderBy:
+          'project_name ASC, grade_name ASC, course_name ASC, material_name ASC',
+    );
+    return maps.map(ProjectMaterialRelation.fromMap).toList();
+  }
+
+  Future<void> importProjectMaterialRelationsByProject(
+    List<ProjectMaterialRelation> rows,
+  ) async {
+    if (rows.isEmpty) {
+      return;
+    }
+    final db = await database;
+    await db.transaction((txn) async {
+      final projects = rows.map((e) => e.projectName).toSet().toList();
+      final placeholders = List.filled(projects.length, '?').join(',');
+      await txn.delete(
+        _projectMaterialRelationTableName,
+        where: 'project_name IN ($placeholders)',
+        whereArgs: projects,
+      );
+      final batch = txn.batch();
+      for (final row in rows) {
+        batch.insert(
+          _projectMaterialRelationTableName,
+          row.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
   Future<int> insertBaseMaterial(BaseMaterial material) async {
     final db = await database;
     return db.insert(_baseMaterialTableName, material.toMap());
@@ -762,7 +878,7 @@ class RecordDatabase {
     final db = await database;
     await db.update(
       _baseMaterialTableName,
-      material.toMap(),
+      {'name': material.name, 'unit': material.unit},
       where: 'id = ?',
       whereArgs: [material.id],
     );
@@ -826,12 +942,6 @@ class RecordDatabase {
         where: 'material_name = ?',
         whereArgs: [oldName],
       );
-      final updatedInventoryInit = await txn.update(
-        _inventoryInitTableName,
-        {'material_name': newName},
-        where: 'material_name = ?',
-        whereArgs: [oldName],
-      );
       final updatedInventoryOut = await txn.update(
         _inventoryOutTableName,
         {'material_name': newName},
@@ -841,7 +951,7 @@ class RecordDatabase {
       return {
         'records': updatedRecords,
         'inventoryIn': updatedInventoryIn,
-        'inventoryInit': updatedInventoryInit,
+        'inventoryInit': 0,
         'inventoryOut': updatedInventoryOut,
       };
     });
@@ -934,16 +1044,16 @@ class RecordDatabase {
       args.add('%${keyword.trim()}%');
     }
     where.add(
-      '(COALESCE(in_sum.purchased_quantity, 0) > 0 OR COALESCE(init_sum.initialized_quantity, 0) > 0 OR COALESCE(out_sum.out_quantity, 0) > 0)',
+      '(COALESCE(in_sum.purchased_quantity, 0) > 0 OR COALESCE(bm.init_quantity, 0) > 0 OR COALESCE(out_sum.out_quantity, 0) > 0)',
     );
     final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
     final rows = await db.rawQuery('''
       SELECT bm.name AS material_name,
-             COALESCE(in_sum.unit, init_sum.unit, out_sum.unit, bm.unit) AS unit,
+             COALESCE(in_sum.unit, out_sum.unit, bm.unit) AS unit,
              COALESCE(in_sum.purchased_quantity, 0) AS purchased_quantity,
-             COALESCE(init_sum.initialized_quantity, 0) AS initialized_quantity,
+             COALESCE(bm.init_quantity, 0) AS initialized_quantity,
              COALESCE(out_sum.out_quantity, 0) AS out_quantity,
-             COALESCE(in_sum.purchased_quantity, 0) + COALESCE(init_sum.initialized_quantity, 0) - COALESCE(out_sum.out_quantity, 0) AS remaining_quantity,
+             COALESCE(in_sum.purchased_quantity, 0) + COALESCE(bm.init_quantity, 0) - COALESCE(out_sum.out_quantity, 0) AS remaining_quantity,
              COALESCE(in_sum.total_amount, 0) AS total_amount
       FROM $_baseMaterialTableName bm
       LEFT JOIN (
@@ -955,13 +1065,6 @@ class RecordDatabase {
         LEFT JOIN $_tableName r ON ir.record_id = r.id
         GROUP BY ir.material_name, ir.unit
       ) in_sum ON in_sum.material_name = bm.name
-      LEFT JOIN (
-        SELECT irr.material_name,
-               irr.unit,
-               SUM(irr.quantity) AS initialized_quantity
-        FROM $_inventoryInitTableName irr
-        GROUP BY irr.material_name, irr.unit
-      ) init_sum ON init_sum.material_name = bm.name
       LEFT JOIN (
         SELECT orc.material_name,
                orc.unit,
@@ -1004,16 +1107,17 @@ class RecordDatabase {
       FROM $_inventoryOutTableName orc
       WHERE orc.material_name = ?
       UNION ALL
-      SELECT irr.id,
-             irr.material_name,
-             irr.quantity,
-             irr.unit,
-             irr.created_at,
+      SELECT -1 AS id,
+             bm.name AS material_name,
+             bm.init_quantity AS quantity,
+             bm.unit AS unit,
+             '1970-01-01T00:00:00.000' AS created_at,
              NULL AS amount,
-             irr.note AS note,
+             NULL AS note,
              'init' AS record_type
-      FROM $_inventoryInitTableName irr
-      WHERE irr.material_name = ?
+      FROM $_baseMaterialTableName bm
+      WHERE bm.name = ?
+        AND bm.init_quantity > 0
       ORDER BY created_at DESC, id DESC
       ''',
       [materialName, materialName, materialName],
@@ -1034,44 +1138,126 @@ class RecordDatabase {
         .toList();
   }
 
-  Future<int> insertInitRecord({
+  Future<void> upsertInitQuantity({
     required String materialName,
+    required String unit,
     required double quantity,
-    String? unit,
-    String? note,
-    DateTime? initDate,
   }) async {
     final db = await database;
-    final record = InventoryInitRecord(
-      materialName: materialName,
-      quantity: quantity,
-      unit: unit,
-      note: note,
-      createdAt: (initDate ?? DateTime.now()).toIso8601String(),
+    await db.update(
+      _baseMaterialTableName,
+      {'init_quantity': quantity, 'unit': unit},
+      where: 'name = ?',
+      whereArgs: [materialName],
     );
-    return db.insert(_inventoryInitTableName, record.toMap());
   }
 
-  Future<List<InventoryInitRecord>> fetchInitRecords({String? keyword}) async {
+  Future<void> importInitQuantitiesOverwrite(
+    List<InventoryInitMaterialRow> rows,
+  ) async {
+    if (rows.isEmpty) {
+      return;
+    }
+    final db = await database;
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final row in rows) {
+        batch.update(
+          _baseMaterialTableName,
+          {'init_quantity': row.quantity, 'unit': row.unit},
+          where: 'name = ?',
+          whereArgs: [row.materialName],
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  Future<List<InventoryInitMaterialRow>> fetchInitMaterialRows({
+    String? keyword,
+    int? limit,
+    int? offset,
+  }) async {
     final db = await database;
     final where = <String>[];
     final args = <Object?>[];
     if (keyword != null && keyword.trim().isNotEmpty) {
-      where.add('material_name LIKE ?');
+      where.add('bm.name LIKE ?');
       args.add('%${keyword.trim()}%');
     }
-    final maps = await db.query(
-      _inventoryInitTableName,
-      where: where.isEmpty ? null : where.join(' AND '),
-      whereArgs: args.isEmpty ? null : args,
-      orderBy: 'created_at DESC, id DESC',
-    );
-    return maps.map(InventoryInitRecord.fromMap).toList();
+    final limitSql = limit == null ? '' : 'LIMIT $limit';
+    final offsetSql = offset == null ? '' : 'OFFSET $offset';
+    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final rows = await db.rawQuery('''
+      SELECT bm.name AS material_name,
+             bm.unit AS unit,
+             COALESCE(bm.init_quantity, 0) AS quantity
+      FROM $_baseMaterialTableName bm
+      $whereSql
+      ORDER BY COALESCE(bm.init_quantity, 0) DESC, bm.id DESC
+      $limitSql
+      $offsetSql
+      ''', args);
+    return rows
+        .map(
+          (row) => InventoryInitMaterialRow(
+            materialName: row['material_name'] as String,
+            unit: row['unit'] as String? ?? '',
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
+          ),
+        )
+        .toList();
   }
 
-  Future<void> deleteInitRecord(int id) async {
+  Future<void> syncInitRecordsWithBaseMaterials() async {
     final db = await database;
-    await db.delete(_inventoryInitTableName, where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      await txn.execute(
+        'UPDATE $_baseMaterialTableName SET init_quantity = COALESCE(init_quantity, 0)',
+      );
+    });
+  }
+
+  Future<void> ensureInitOneToOne() async {
+    final db = await database;
+    await _ensureColumn(
+      db,
+      _baseMaterialTableName,
+      'init_quantity',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await _ensureBaseMaterialNameUniqueInternal(db);
+    await db.execute('DROP TABLE IF EXISTS inventory_init_records');
+  }
+
+  Future<void> _ensureBaseMaterialNameUniqueInternal(Database db) async {
+    await db.transaction((txn) async {
+      final grouped = await txn.rawQuery('''
+        SELECT TRIM(name) AS name,
+               MAX(COALESCE(unit, '')) AS unit,
+               SUM(COALESCE(init_quantity, 0)) AS init_quantity,
+               MIN(id) AS keep_id
+        FROM $_baseMaterialTableName
+        GROUP BY TRIM(name)
+        HAVING TRIM(name) <> ''
+      ''');
+      await txn.delete(_baseMaterialTableName);
+      for (final row in grouped) {
+        final name = (row['name'] as String?)?.trim() ?? '';
+        if (name.isEmpty) {
+          continue;
+        }
+        await txn.insert(_baseMaterialTableName, {
+          'id': (row['keep_id'] as num?)?.toInt(),
+          'name': name,
+          'unit': (row['unit'] as String?)?.trim() ?? '',
+          'init_quantity': (row['init_quantity'] as num?)?.toDouble() ?? 0,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_base_material_name_unique ON $_baseMaterialTableName(name)',
+    );
   }
 
   Future<int> insertOutRecord({
@@ -1122,52 +1308,19 @@ class RecordDatabase {
     Reimbursement reimbursement,
     List<int> recordIds,
   ) async {
-    final db = await database;
-    return db.transaction((txn) async {
-      final id = await txn.insert(
-        _reimbursementTableName,
-        reimbursement.toMap(),
-      );
-      for (final recordId in recordIds) {
-        await txn.update(
-          _tableName,
-          {'reimbursement_id': id},
-          where: 'id = ?',
-          whereArgs: [recordId],
-        );
-      }
-      return id;
-    });
+    return 0;
   }
 
   Future<List<Reimbursement>> fetchReimbursements() async {
-    final db = await database;
-    final maps = await db.query(
-      _reimbursementTableName,
-      orderBy: 'date DESC, id DESC',
-    );
-    return maps.map(Reimbursement.fromMap).toList();
+    return [];
   }
 
   Future<List<TransactionRecord>> fetchUnreimbursedRecords() async {
-    final db = await database;
-    final maps = await db.query(
-      _tableName,
-      where: 'reimbursement_id IS NULL AND type = ?',
-      whereArgs: ['expense'],
-      orderBy: 'date DESC, id DESC',
-    );
-    return maps.map(TransactionRecord.fromMap).toList();
+    return fetchAllExpenseRecords();
   }
 
   Future<List<TransactionRecord>> fetchReimbursedRecords() async {
-    final db = await database;
-    final maps = await db.query(
-      _tableName,
-      where: 'reimbursement_id IS NOT NULL',
-      orderBy: 'date DESC, id DESC',
-    );
-    return maps.map(TransactionRecord.fromMap).toList();
+    return [];
   }
 
   Future<List<TransactionRecord>> fetchAllExpenseRecords() async {
@@ -1199,8 +1352,6 @@ class RecordDatabase {
   Future<void> clearAllRecords() async {
     final db = await database;
     await db.delete(_inventoryTableName);
-    await db.delete(_inventoryInitTableName);
-    await db.delete(_reimbursementTableName);
     await db.delete(_tableName);
   }
 
