@@ -211,7 +211,7 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
         return;
       }
 
-      if (value == '+' || value == '-') {
+      if (value == '+' || value == '-' || value == '×' || value == '÷') {
         _handleOperator(value);
         _amountText = _buildDisplayText();
         return;
@@ -243,11 +243,12 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   void _handleOperator(String operator) {
-    // 处理加减运算符
+    // 处理运算符（+、-、×、÷），按运算符时立即计算之前的结果
     if (_operator == null) {
       _operator = operator;
       return;
     }
+    // 已有运算符时，先计算当前表达式结果，再设置新运算符
     final result = _computeResult();
     _leftValue = _formatAmountInput(result);
     _rightValue = '';
@@ -306,18 +307,21 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   String _buildDisplayText() {
-    // 构建金额显示文本
+    // 构建金额显示文本，输入右值后立即显示计算结果
     if (_operator == null) {
       return _leftValue;
     }
     if (_rightValue.isEmpty) {
+      // 只有运算符没有右值时，显示左值和运算符
       return '$_leftValue$_operator';
     }
-    return '$_leftValue$_operator$_rightValue';
+    // 有右值时，立即显示计算结果
+    final result = _computeResult();
+    return _formatAmountInput(result);
   }
 
   double _computeResult() {
-    // 计算表达式结果
+    // 计算表达式结果，支持加减乘除四则运算
     final left = double.tryParse(_leftValue) ?? 0;
     final right = _rightValue.isEmpty ? 0 : double.tryParse(_rightValue) ?? 0;
     if (_operator == '+') {
@@ -325,6 +329,16 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
     }
     if (_operator == '-') {
       return left - right;
+    }
+    if (_operator == '×') {
+      return left * right;
+    }
+    if (_operator == '÷') {
+      // 除数为 0 时返回 0
+      if (right == 0) {
+        return 0;
+      }
+      return left / right;
     }
     return left;
   }
@@ -1155,10 +1169,7 @@ class _NumberPad extends StatelessWidget {
             _PadButton(label: '1', onTap: () => onKeyPressed('1')),
             _PadButton(label: '2', onTap: () => onKeyPressed('2')),
             _PadButton(label: '3', onTap: () => onKeyPressed('3')),
-            _PadButton(
-              icon: Icons.backspace_outlined,
-              onTap: () => onKeyPressed('⌫'),
-            ),
+            _PadButton(label: '+', onTap: () => onKeyPressed('+')),
           ],
         ),
         const SizedBox(height: 8),
@@ -1176,22 +1187,30 @@ class _NumberPad extends StatelessWidget {
             _PadButton(label: '7', onTap: () => onKeyPressed('7')),
             _PadButton(label: '8', onTap: () => onKeyPressed('8')),
             _PadButton(label: '9', onTap: () => onKeyPressed('9')),
-            _PadButton(label: '+', onTap: () => onKeyPressed('+')),
+            _PadButton(label: '×', onTap: () => onKeyPressed('×')),
           ],
         ),
         const SizedBox(height: 8),
         _PadRow(
           children: [
-            _PadButton(label: '再记', onTap: disabled ? null : onSaveAndContinue),
-            _PadButton(label: '0', onTap: () => onKeyPressed('0')),
             _PadButton(label: '.', onTap: () => onKeyPressed('.')),
+            _PadButton(label: '0', onTap: () => onKeyPressed('0')),
             _PadButton(
-              label: disabled ? '保存中' : '保存',
-              backgroundColor: const Color(0xFFE35D5D),
-              textColor: Colors.white,
-              onTap: disabled ? null : onSave,
+              icon: Icons.backspace_outlined,
+              onTap: () => onKeyPressed('⌫'),
             ),
+            _PadButton(label: '÷', onTap: () => onKeyPressed('÷')),
           ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: _PadButton(
+            label: disabled ? '保存中' : '保存',
+            backgroundColor: const Color(0xFFE35D5D),
+            textColor: Colors.white,
+            onTap: disabled ? null : onSave,
+          ),
         ),
       ],
     );
