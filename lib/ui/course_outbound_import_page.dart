@@ -11,6 +11,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../data/record_database.dart';
+
 class CourseOutboundImportPage extends StatefulWidget {
   const CourseOutboundImportPage({super.key});
 
@@ -147,7 +149,10 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       _calculating = true;
     });
     try {
-      final aggregateResult = _readAndAggregate(_sourceBytes!, peopleCounts);
+      final aggregateResult = await _readAndAggregate(
+        _sourceBytes!,
+        peopleCounts,
+      );
       final filePath = await _writeResult(
         aggregate: aggregateResult,
         peopleCounts: peopleCounts,
@@ -264,10 +269,10 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     return result ?? false;
   }
 
-  _AggregateResult _readAndAggregate(
+  Future<_AggregateResult> _readAndAggregate(
     Uint8List sourceBytes,
     Map<String, Map<String, int>> peopleCounts,
-  ) {
+  ) async {
     _appendDebug('开始解析源数据');
     final workbook = excel.Excel.decodeBytes(sourceBytes);
     final sourceSheet = _findSourceSheet(workbook);
@@ -282,6 +287,9 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     final aggregate = <String, Map<_MaterialKey, _AggregateItem>>{
       for (final grade in grades) grade: <_MaterialKey, _AggregateItem>{},
     };
+    // 课程成本数据：按(年级,课程)分组记录材料使用情况
+    final courseCostMap = <String, _CourseCostItem>{};
+
     for (var i = 1; i < rows.length; i++) {
       final row = rows[i];
       final grade = _cellText(_cellAt(row, index['年级']!));
@@ -352,19 +360,97 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       if (courseName.isNotEmpty) {
         item.courses.add(courseName);
       }
+      // 记录课程成本数据（用于成本计算Sheet）
+      if (courseName.isNotEmpty) {
+        final costKey = '$grade|$courseName';
+        final costItem = courseCostMap.putIfAbsent(
+          costKey,
+          () => _CourseCostItem(grade: grade, courseName: courseName),
+        );
+        // 累加材料数量
+        if (!costItem.materialDetails.any(
+          (d) => d.materialName == materialName && d.role == role,
+        )) {
+          costItem.materialDetails.add(
+            _CourseMaterialDetail(
+              materialName: materialName,
+              unitPrice: 0,
+              quantity: finalQty,
+              role: role,
+            ),
+          );
+        } else {
+          final existingDetail = costItem.materialDetails.firstWhere(
+            (d) => d.materialName == materialName && d.role == role,
+          );
+          existingDetail.quantity += finalQty;
+        }
+      }
     }
+
+    // 获取材料单价并更新课程成本数据
+    _appendDebug('开始获取材料单价');
+    await _fetchAndApplyUnitPrices(courseCostMap);
+
+    // 暂不排序，在写入成本计算Sheet时按每生成本排序
+    final courseCosts = courseCostMap.values.toList();
+
     final sourceRows = rows
         .map(
           (row) =>
               row.map((cell) => _cellExportValue(cell)).toList(growable: true),
         )
         .toList(growable: true);
-    _appendDebug('聚合完成: 原始行=${sourceRows.length}');
+    _appendDebug(
+      '聚合完成: 原始行=${sourceRows.length}，课程成本数据=${courseCosts.length}条',
+    );
     return _AggregateResult(
       aggregate: aggregate,
       sourceRows: sourceRows,
       grades: grades,
+      courseCosts: courseCosts,
     );
+  }
+
+  // 从数据库获取材料单价并更新课程成本数据
+  Future<void> _fetchAndApplyUnitPrices(
+    Map<String, _CourseCostItem> courseCostMap,
+  ) async {
+    try {
+      final inventorySummary = await RecordDatabase.instance
+          .fetchInventorySummary();
+      final unitPriceCache = <String, double>{};
+      for (final item in inventorySummary) {
+        final unitPrice = item.purchasedQuantity > 0
+            ? item.totalAmount / item.purchasedQuantity
+            : 0.0;
+        unitPriceCache[item.materialName] = unitPrice;
+        _appendDebug('材料单价: ${item.materialName} = $unitPrice');
+      }
+      // 更新课程成本数据中的单价并计算总价
+      for (final costItem in courseCostMap.values) {
+        double totalTeacherCost = 0;
+        double totalStudentCost = 0;
+        for (final detail in costItem.materialDetails) {
+          final unitPrice = unitPriceCache[detail.materialName] ?? 0.0;
+          detail.unitPrice = unitPrice;
+          final materialCost = detail.quantity * unitPrice;
+          if (detail.role == '老师') {
+            totalTeacherCost += materialCost;
+          } else {
+            totalStudentCost += materialCost;
+          }
+        }
+        costItem.teacherCost = totalTeacherCost;
+        costItem.studentCost = totalStudentCost;
+        _appendDebug(
+          '课程成本: ${costItem.grade}-${costItem.courseName}, '
+          '老师=$totalTeacherCost, 学生=$totalStudentCost',
+        );
+      }
+    } catch (e) {
+      _appendDebug('获取材料单价失败: $e，将使用0单价');
+    }
   }
 
   Future<String> _writeResult({
@@ -514,6 +600,70 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         ],
       );
     }
+
+    // 成本计算Sheet：按年级-课程汇总成本，按每生成本从高到低排序
+    final costSheet = workbook['成本计算'];
+    _appendSheetRow(
+      sheet: costSheet,
+      stage: '成本计算-表头',
+      row: [
+        '序号',
+        '年级',
+        '课程名称',
+        '老师材料总价',
+        '学生材料总价',
+        '材料总价',
+        '学生人数',
+        '老师人数',
+        '每生成本',
+        '备注（材料名称:单价）',
+      ],
+    );
+    // 按每生成本从高到低排序
+    final sortedCosts = aggregate.courseCosts.toList()
+      ..sort((a, b) {
+        final aTotal = a.teacherCost + a.studentCost;
+        final bTotal = b.teacherCost + b.studentCost;
+        final aStudentCount = peopleCounts[a.grade]!['学生'] ?? 0;
+        final bStudentCount = peopleCounts[b.grade]!['学生'] ?? 0;
+        final aCostPerStudent = aStudentCount > 0
+            ? aTotal / aStudentCount
+            : 0.0;
+        final bCostPerStudent = bStudentCount > 0
+            ? bTotal / bStudentCount
+            : 0.0;
+        return bCostPerStudent.compareTo(aCostPerStudent);
+      });
+    for (var i = 0; i < sortedCosts.length; i++) {
+      final costItem = sortedCosts[i];
+      final totalCost = costItem.teacherCost + costItem.studentCost;
+      final studentCount = peopleCounts[costItem.grade]!['学生'] ?? 0;
+      final teacherCount = peopleCounts[costItem.grade]!['老师'] ?? 0;
+      final costPerStudent = studentCount > 0 ? totalCost / studentCount : 0.0;
+      // 生成材料明细备注
+      final materialNotes = costItem.materialDetails
+          .map((d) => '${d.materialName}:${_formatNumber(d.unitPrice)}')
+          .toSet()
+          .join('，');
+      _appendSheetRow(
+        sheet: costSheet,
+        stage: '成本计算-数据',
+        rowIndex: i + 1,
+        row: [
+          i + 1,
+          costItem.grade,
+          costItem.courseName,
+          _formatNumber(costItem.teacherCost),
+          _formatNumber(costItem.studentCost),
+          _formatNumber(totalCost),
+          studentCount,
+          teacherCount,
+          _formatNumber(costPerStudent),
+          materialNotes,
+        ],
+      );
+    }
+
     _appendDebug('开始应用表格样式');
     _beautifyWorkbook(workbook);
     _appendDebug('开始保存xlsx文件');
@@ -1104,11 +1254,13 @@ class _AggregateResult {
     required this.aggregate,
     required this.sourceRows,
     required this.grades,
+    required this.courseCosts,
   });
 
   final Map<String, Map<_MaterialKey, _AggregateItem>> aggregate;
   final List<List<dynamic>> sourceRows;
   final List<String> grades;
+  final List<_CourseCostItem> courseCosts; // 课程成本数据
 }
 
 class _MaterialKey {
@@ -1164,4 +1316,30 @@ class _AggregateItem {
   final double eachGroupQty;
   final double eachGroupStudent;
   double groupCount;
+}
+
+// 课程成本明细项：记录每种材料在特定课程中的使用情况
+class _CourseMaterialDetail {
+  _CourseMaterialDetail({
+    required this.materialName,
+    required this.unitPrice,
+    required this.quantity,
+    required this.role,
+  });
+
+  final String materialName;
+  double unitPrice; // 材料单价
+  double quantity; // 使用数量
+  final String role; // 学生/老师
+}
+
+// 课程成本汇总项：记录每个年级-课程组合的成本信息
+class _CourseCostItem {
+  _CourseCostItem({required this.grade, required this.courseName});
+
+  final String grade;
+  final String courseName;
+  double teacherCost = 0; // 老师材料总价
+  double studentCost = 0; // 学生材料总价
+  final List<_CourseMaterialDetail> materialDetails = []; // 材料明细列表
 }
