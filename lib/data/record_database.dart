@@ -607,6 +607,31 @@ class RecordDatabase {
     return maps.map(TransactionRecord.fromMap).toList();
   }
 
+  Future<List<TransactionRecord>> fetchRecords({
+    required int billId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    final db = await database;
+    final where = <String>['bill_id = ?'];
+    final args = <Object?>[billId];
+    if (startDate != null) {
+      where.add('date(date) >= date(?)');
+      args.add(startDate.toIso8601String());
+    }
+    if (endDate != null) {
+      where.add('date(date) <= date(?)');
+      args.add(endDate.toIso8601String());
+    }
+    final maps = await db.query(
+      _tableName,
+      where: where.join(' AND '),
+      whereArgs: args,
+      orderBy: 'date DESC, id DESC',
+    );
+    return maps.map(TransactionRecord.fromMap).toList();
+  }
+
   Future<List<String>> fetchRecentRecordDates({
     required int billId,
     String? beforeDate,

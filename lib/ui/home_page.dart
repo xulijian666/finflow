@@ -131,7 +131,7 @@ class _HomePageState extends State<HomePage>
       _loading = true;
       _loadingError = false;
       _loadingMore = false;
-      _hasMore = true;
+      _hasMore = false;
       _loadedDateKeys.clear();
     });
     try {
@@ -154,10 +154,20 @@ class _HomePageState extends State<HomePage>
         });
         return;
       }
-      await _loadRecentDays(limit: 3, append: false);
+      // 首页固定全量加载，避免重载后列表被截断为最近几天的数据
+      final records = await RecordDatabase.instance.fetchRecords(
+        billId: billId,
+        startDate: startDate,
+        endDate: endDate,
+      );
       if (!mounted) {
         return;
       }
+      setState(() {
+        _records = records;
+        _hasMore = false;
+        _loading = false;
+      });
     } catch (error) {
       if (!mounted) {
         return;
@@ -1928,21 +1938,7 @@ class _HomePageState extends State<HomePage>
                       itemBuilder: (context, index) {
                         final file = backups[index];
                         final name = p.basename(file.path);
-                        // 提取时间戳并格式化
-                        String displayTime = name;
-                        try {
-                          final timestamp = name.split('_')[2].split('.')[0];
-                          if (timestamp.length >= 14) {
-                            final year = timestamp.substring(0, 4);
-                            final month = timestamp.substring(4, 6);
-                            final day = timestamp.substring(6, 8);
-                            final hour = timestamp.substring(9, 11);
-                            final minute = timestamp.substring(11, 13);
-                            final second = timestamp.substring(13, 15);
-                            displayTime =
-                                '$year-$month-$day $hour:$minute:$second';
-                          }
-                        } catch (_) {}
+                        final displayTime = _formatBackupDisplayName(name);
 
                         return ListTile(
                           leading: const Icon(Icons.history),
@@ -2554,6 +2550,21 @@ class _HomePageState extends State<HomePage>
     final second = date.second.toString().padLeft(2, '0');
     return '$year$month$day'
         '_$hour$minute$second';
+  }
+
+  String _formatBackupDisplayName(String fileName) {
+    // 将备份文件名中的 ISO 风格时间戳格式化为标准年月日时分秒
+    final match = RegExp(
+      r'^finflow_backup_(\d{4}-\d{2}-\d{2})T(\d{2})(\d{2})(\d{2})(?:\.\d+)?\.db$',
+    ).firstMatch(fileName);
+    if (match == null) {
+      return fileName;
+    }
+    final date = match.group(1)!;
+    final hour = match.group(2)!;
+    final minute = match.group(3)!;
+    final second = match.group(4)!;
+    return '$date $hour:$minute:$second';
   }
 
   Future<int> _importFromXlsx(_ImportSelection selection) async {

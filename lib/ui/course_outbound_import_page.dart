@@ -543,13 +543,19 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       }
     }
     final summarySheet = workbook['出库汇总'];
+    final inventorySummary = await RecordDatabase.instance.fetchInventorySummary();
+    final inventoryQuantityMap = <String, double>{
+      for (final item in inventorySummary) item.materialName: item.remainingQuantity,
+    };
     _appendSheetRow(
       sheet: summarySheet,
       stage: '出库汇总-表头',
       row: [
         '序号',
         '材料名称',
+        '当前库存数量',
         '出库总数量',
+        '出库后库存数量',
         ...aggregate.grades.map((grade) => '$grade数量'),
       ],
     );
@@ -588,6 +594,9 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           .map((grade) => row.value[grade] ?? 0)
           .toList();
       final total = gradeValues.fold<double>(0, (sum, item) => sum + item);
+      // 根据材料名称回填当前库存，并计算出库后的剩余库存
+      final currentInventory = inventoryQuantityMap[row.key] ?? 0;
+      final remainingInventory = currentInventory - total;
       _appendSheetRow(
         sheet: summarySheet,
         stage: '出库汇总-数据',
@@ -595,7 +604,9 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         row: [
           i + 1,
           row.key,
+          _formatNumber(currentInventory),
           _formatNumber(total),
+          _formatNumber(remainingInventory),
           ...gradeValues.map((value) => _formatNumber(value)),
         ],
       );
@@ -906,6 +917,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     }
     final highlightColumns = <int>{};
     final healthScoreColumns = <int>{};
+    final remainingInventoryColumns = <int>{};
     for (var col = 0; col < sheet.maxCols; col++) {
       final headerCell = sheet.cell(
         excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0),
@@ -916,6 +928,9 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       }
       if (headerText.contains('健康度评分')) {
         healthScoreColumns.add(col);
+      }
+      if (headerText == '出库后库存数量') {
+        remainingInventoryColumns.add(col);
       }
     }
     // 健康度颜色样式
@@ -934,6 +949,15 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     final healthExcellentStyle = excel.CellStyle(
       fontColorHex: '#FF1B5E20',
       bold: true,
+    );
+    final nonPositiveInventoryStyle = excel.CellStyle(
+      fontColorHex: '#FF8B0000',
+      backgroundColorHex: '#FFFDE9D9',
+      bold: true,
+      leftBorder: normalStyle.leftBorder,
+      rightBorder: normalStyle.rightBorder,
+      topBorder: normalStyle.topBorder,
+      bottomBorder: normalStyle.bottomBorder,
     );
 
     for (var row = 0; row < sheet.maxRows; row++) {
@@ -960,6 +984,13 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
             cell.cellStyle = normalStyle;
           }
           continue;
+        }
+        if (remainingInventoryColumns.contains(col)) {
+          final numericValue = num.tryParse(_valueText(cell.value));
+          if (numericValue != null && numericValue <= 0) {
+            cell.cellStyle = nonPositiveInventoryStyle;
+            continue;
+          }
         }
         cell.cellStyle = highlightColumns.contains(col)
             ? highlightStyle
