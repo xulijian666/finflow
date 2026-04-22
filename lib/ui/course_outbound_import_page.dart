@@ -616,6 +616,14 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         '学生人数',
         '老师人数',
         '每生成本',
+        '师均成本',
+        '人均成本',
+        '生师比',
+        '最高材料占比',
+        '集中度指数',
+        '最大成本项',
+        '健康度评分',
+        '健康度评语',
         '备注（材料名称:单价）',
       ],
     );
@@ -640,6 +648,55 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       final studentCount = peopleCounts[costItem.grade]!['学生'] ?? 0;
       final teacherCount = peopleCounts[costItem.grade]!['老师'] ?? 0;
       final costPerStudent = studentCount > 0 ? totalCost / studentCount : 0.0;
+      final costPerTeacher = teacherCount > 0 ? totalCost / teacherCount : 0.0;
+      final totalPeople = studentCount + teacherCount;
+      final costPerPerson = totalPeople > 0 ? totalCost / totalPeople : 0.0;
+      final studentTeacherRatio = teacherCount > 0
+          ? studentCount / teacherCount
+          : 0.0;
+      // 计算成本结构分析指标
+      final materialCosts = <String, double>{};
+      for (final detail in costItem.materialDetails) {
+        final cost = detail.quantity * detail.unitPrice;
+        materialCosts[detail.materialName] =
+            (materialCosts[detail.materialName] ?? 0) + cost;
+      }
+      // 最高材料占比
+      double highestRatio = 0.0;
+      String highestCostMaterial = '';
+      if (totalCost > 0) {
+        for (final entry in materialCosts.entries) {
+          final ratio = entry.value / totalCost;
+          if (ratio > highestRatio) {
+            highestRatio = ratio;
+            highestCostMaterial = entry.key;
+          }
+        }
+      }
+      // 集中度指数（HHI）：各材料占比的平方和，接近1表示高度集中
+      double hhi = 0.0;
+      if (totalCost > 0) {
+        for (final cost in materialCosts.values) {
+          final ratio = cost / totalCost;
+          hhi += ratio * ratio;
+        }
+      }
+      // 健康度评分（基于集中度和最高占比）
+      String healthScore = '';
+      String healthComment = '';
+      if (highestRatio >= 0.7 || hhi >= 0.6) {
+        healthScore = '❌ 差';
+        healthComment = '成本高度集中于${highestCostMaterial}，需重点优化';
+      } else if (highestRatio >= 0.5 || hhi >= 0.4) {
+        healthScore = '⚠️ 中';
+        healthComment = '成本集中度偏高，${highestCostMaterial}可优化';
+      } else if (highestRatio >= 0.3 || hhi >= 0.25) {
+        healthScore = '✅ 良';
+        healthComment = '成本结构合理，可小幅优化';
+      } else {
+        healthScore = '⭐ 优';
+        healthComment = '成本分散均匀，结构健康';
+      }
       // 生成材料明细备注
       final materialNotes = costItem.materialDetails
           .map((d) => '${d.materialName}:${_formatNumber(d.unitPrice)}')
@@ -659,6 +716,14 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           studentCount,
           teacherCount,
           _formatNumber(costPerStudent),
+          _formatNumber(costPerTeacher),
+          _formatNumber(costPerPerson),
+          _formatNumber(studentTeacherRatio),
+          '${_formatNumber(highestRatio * 100)}%',
+          _formatNumber(hhi),
+          highestCostMaterial,
+          healthScore,
+          healthComment,
           materialNotes,
         ],
       );
@@ -815,12 +880,15 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       topBorder: border,
       bottomBorder: border,
     );
-    for (final sheet in workbook.tables.values) {
+    for (final entry in workbook.tables.entries) {
+      final sheetName = entry.key;
+      final sheet = entry.value;
       _applySheetStyles(
         sheet: sheet,
         normalStyle: normalStyle,
         headerStyle: headerStyle,
         highlightStyle: highlightStyle,
+        sheetName: sheetName,
       );
       _autoFitSheetColumns(sheet);
     }
@@ -831,11 +899,13 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     required excel.CellStyle normalStyle,
     required excel.CellStyle headerStyle,
     required excel.CellStyle highlightStyle,
+    required String sheetName,
   }) {
     if (sheet.maxRows <= 0 || sheet.maxCols <= 0) {
       return;
     }
     final highlightColumns = <int>{};
+    final healthScoreColumns = <int>{};
     for (var col = 0; col < sheet.maxCols; col++) {
       final headerCell = sheet.cell(
         excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0),
@@ -844,7 +914,28 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       if (headerText.contains('出库数量')) {
         highlightColumns.add(col);
       }
+      if (headerText.contains('健康度评分')) {
+        healthScoreColumns.add(col);
+      }
     }
+    // 健康度颜色样式
+    final healthBadStyle = excel.CellStyle(
+      fontColorHex: '#FF8B0000',
+      bold: true,
+    );
+    final healthMidStyle = excel.CellStyle(
+      fontColorHex: '#FF996600',
+      bold: true,
+    );
+    final healthGoodStyle = excel.CellStyle(
+      fontColorHex: '#FF2E7D32',
+      bold: true,
+    );
+    final healthExcellentStyle = excel.CellStyle(
+      fontColorHex: '#FF1B5E20',
+      bold: true,
+    );
+
     for (var row = 0; row < sheet.maxRows; row++) {
       for (var col = 0; col < sheet.maxCols; col++) {
         final cell = sheet.cell(
@@ -852,6 +943,22 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         );
         if (row == 0) {
           cell.cellStyle = headerStyle;
+          continue;
+        }
+        // 成本计算Sheet的健康度评分列特殊处理
+        if (healthScoreColumns.contains(col)) {
+          final cellText = _valueText(cell.value) ?? '';
+          if (cellText.contains('差')) {
+            cell.cellStyle = healthBadStyle;
+          } else if (cellText.contains('中')) {
+            cell.cellStyle = healthMidStyle;
+          } else if (cellText.contains('良')) {
+            cell.cellStyle = healthGoodStyle;
+          } else if (cellText.contains('优')) {
+            cell.cellStyle = healthExcellentStyle;
+          } else {
+            cell.cellStyle = normalStyle;
+          }
           continue;
         }
         cell.cellStyle = highlightColumns.contains(col)
