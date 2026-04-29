@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -778,6 +779,75 @@ class RecordDatabase {
       ORDER BY r.date DESC, r.id DESC
       ''', args);
     return rows;
+  }
+
+  Future<Map<String, Object?>> fetchBusinessTableSnapshot() async {
+    final db = await database;
+    // 读取当前数据库中的全部业务表，并附带字段定义与全量行数据供大模型使用。
+    final tableRows = await db.rawQuery('''
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table'
+        AND name NOT LIKE 'sqlite_%'
+      ORDER BY name ASC
+    ''');
+    final tables = <Map<String, Object?>>[];
+    for (final item in tableRows) {
+      final tableName = (item['name'] as String? ?? '').trim();
+      if (tableName.isEmpty || tableName == 'android_metadata') {
+        continue;
+      }
+      final escapedTableName = _escapeIdentifier(tableName);
+      final columnRows = await db.rawQuery(
+        'PRAGMA table_info("$escapedTableName")',
+      );
+      final dataRows = await db.rawQuery(
+        'SELECT * FROM "$escapedTableName" ORDER BY rowid ASC',
+      );
+      tables.add({
+        'table_name': tableName,
+        'row_count': dataRows.length,
+        'columns': columnRows
+            .map(
+              (column) => <String, Object?>{
+                'name': column['name'],
+                'type': column['type'],
+                'not_null': column['notnull'],
+                'default_value': column['dflt_value'],
+                'primary_key': column['pk'],
+              },
+            )
+            .toList(),
+        'rows': dataRows
+            .map(
+              (row) => row.map<String, Object?>(
+                (key, value) => MapEntry(key, _normalizeSnapshotValue(value)),
+              ),
+            )
+            .toList(),
+      });
+    }
+    return {
+      'generated_at': DateTime.now().toIso8601String(),
+      'table_count': tables.length,
+      'tables': tables,
+    };
+  }
+
+  // 转义表名中的双引号，避免动态查询时出现 SQL 语法问题。
+  String _escapeIdentifier(String value) {
+    return value.replaceAll('"', '""');
+  }
+
+  // 统一清洗快照值，确保后续可直接 JSON 序列化。
+  Object? _normalizeSnapshotValue(Object? value) {
+    if (value is num || value is String || value is bool || value == null) {
+      return value;
+    }
+    if (value is Uint8List) {
+      return value.toList();
+    }
+    return value.toString();
   }
 
   Future<List<BaseMaterial>> fetchBaseMaterials({

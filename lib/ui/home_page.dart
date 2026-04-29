@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/record_database.dart';
 import '../data/transaction_record.dart';
+import 'ai_chat_page.dart';
 import 'extension_menu.dart';
 import 'line_account_page.dart';
 import 'record_form_sheet.dart';
@@ -30,10 +31,14 @@ class _HomePageState extends State<HomePage>
   // 持久化键值
   static const String _prefKeyBillId = 'selected_bill_id';
   static const String _prefKeyAccountId = 'selected_account_id';
-  static const String _prefKeyLongcatApiKey = 'longcat_api_key';
+  static const String _prefKeyDeepSeekBaseUrl = 'deepseek_base_url';
+  static const String _prefKeyDeepSeekApiKey = 'deepseek_api_key';
+  static const String _prefKeyDeepSeekModel = 'deepseek_model';
   static const String _prefKeyRecordFilterMode = 'record_filter_mode';
-  static const String _defaultLongcatApiKey =
-      'ak_1DQ2Mp2d77AD7nr5H840Y4xT2VD5D';
+  static const String _defaultDeepSeekBaseUrl = 'https://api.deepseek.com';
+  static const String _defaultDeepSeekApiKey =
+      'sk-8e202376d339407fb803a794cd58c196';
+  static const String _defaultDeepSeekModel = 'deepseek-v4-flash';
 
   // 列表数据与账户余额
   List<TransactionRecord> _records = [];
@@ -59,7 +64,9 @@ class _HomePageState extends State<HomePage>
   int? _currentAccountId;
   int? _editingBillId;
   int? _editingAccountId;
-  String _longcatApiKey = _defaultLongcatApiKey;
+  String _deepSeekBaseUrl = _defaultDeepSeekBaseUrl;
+  String _deepSeekApiKey = _defaultDeepSeekApiKey;
+  String _deepSeekModel = _defaultDeepSeekModel;
   _RecordTimeFilterMode _timeFilterMode = _RecordTimeFilterMode.all;
   int _timeFilterYear = DateTime.now().year;
   int _timeFilterMonth = DateTime.now().month;
@@ -985,7 +992,9 @@ class _HomePageState extends State<HomePage>
       final prefs = await SharedPreferences.getInstance();
       final billId = prefs.getInt(_prefKeyBillId);
       final accountId = prefs.getInt(_prefKeyAccountId);
-      final apiKey = prefs.getString(_prefKeyLongcatApiKey);
+      final baseUrl = prefs.getString(_prefKeyDeepSeekBaseUrl);
+      final apiKey = prefs.getString(_prefKeyDeepSeekApiKey);
+      final model = prefs.getString(_prefKeyDeepSeekModel);
       final filterMode = prefs.getString(_prefKeyRecordFilterMode) ?? 'all';
       final now = DateTime.now();
       final nextMode = switch (filterMode) {
@@ -997,11 +1006,15 @@ class _HomePageState extends State<HomePage>
         setState(() {
           if (billId != null) _currentBillId = billId;
           if (accountId != null) _currentAccountId = accountId;
-          if (apiKey != null && apiKey.trim().isNotEmpty) {
-            _longcatApiKey = apiKey.trim();
-          } else {
-            _longcatApiKey = _defaultLongcatApiKey;
-          }
+          _deepSeekBaseUrl = (baseUrl != null && baseUrl.trim().isNotEmpty)
+              ? baseUrl.trim()
+              : _defaultDeepSeekBaseUrl;
+          _deepSeekApiKey = (apiKey != null && apiKey.trim().isNotEmpty)
+              ? apiKey.trim()
+              : _defaultDeepSeekApiKey;
+          _deepSeekModel = (model != null && model.trim().isNotEmpty)
+              ? model.trim()
+              : _defaultDeepSeekModel;
           _timeFilterMode = nextMode;
           _timeFilterYear = now.year;
           _timeFilterMonth = now.month;
@@ -1032,12 +1045,18 @@ class _HomePageState extends State<HomePage>
     }
   }
 
-  Future<void> _saveLongcatApiKey(String value) async {
+  Future<void> _saveDeepSeekConfig({
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+  }) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_prefKeyLongcatApiKey, value);
+      await prefs.setString(_prefKeyDeepSeekBaseUrl, baseUrl);
+      await prefs.setString(_prefKeyDeepSeekApiKey, apiKey);
+      await prefs.setString(_prefKeyDeepSeekModel, model);
     } catch (e) {
-      debugPrint('保存模型密钥失败: $e');
+      debugPrint('保存 DeepSeek 配置失败: $e');
     }
   }
 
@@ -1065,18 +1084,50 @@ class _HomePageState extends State<HomePage>
     return '$prefix****$suffix';
   }
 
-  Future<void> _editLongcatApiKey() async {
-    final controller = TextEditingController(text: _longcatApiKey);
-    final result = await showDialog<String>(
+  Future<void> _editDeepSeekConfig() async {
+    final baseUrlController = TextEditingController(text: _deepSeekBaseUrl);
+    // API Key 不在弹窗中明文回填，避免打开设置时直接暴露完整密钥。
+    final apiKeyController = TextEditingController();
+    final modelController = TextEditingController(text: _deepSeekModel);
+    final result = await showDialog<Map<String, String>>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('配置 LongCat AK'),
-          content: TextField(
-            controller: controller,
-            decoration: const InputDecoration(
-              hintText: '请输入 LongCat AK',
-              border: OutlineInputBorder(),
+          title: const Text('配置 DeepSeek'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: baseUrlController,
+                  decoration: const InputDecoration(
+                    labelText: 'Base URL',
+                    hintText: '请输入 DeepSeek Base URL',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: apiKeyController,
+                  obscureText: true,
+                  obscuringCharacter: '*',
+                  decoration: const InputDecoration(
+                    labelText: 'API Key',
+                    hintText: '已配置则留空，输入后将覆盖原密钥',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: modelController,
+                  decoration: const InputDecoration(
+                    labelText: 'Model',
+                    hintText: '请输入模型名称',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
             ),
           ),
           actions: [
@@ -1085,23 +1136,54 @@ class _HomePageState extends State<HomePage>
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(context).pop(controller.text),
+              onPressed: () => Navigator.of(context).pop({
+                'baseUrl': baseUrlController.text,
+                'apiKey': apiKeyController.text,
+                'model': modelController.text,
+              }),
               child: const Text('保存'),
             ),
           ],
         );
       },
     );
-    final trimmed = result?.trim();
-    if (trimmed == null) {
+    if (result == null) {
       return;
     }
-    final nextValue = trimmed.isEmpty ? _defaultLongcatApiKey : trimmed;
+    final nextBaseUrl = (result['baseUrl'] ?? '').trim().isEmpty
+        ? _defaultDeepSeekBaseUrl
+        : (result['baseUrl'] ?? '').trim();
+    // 密钥输入框留空时，表示继续沿用当前已保存的密钥。
+    final nextApiKey = (result['apiKey'] ?? '').trim().isEmpty
+        ? _deepSeekApiKey
+        : (result['apiKey'] ?? '').trim();
+    final nextModel = (result['model'] ?? '').trim().isEmpty
+        ? _defaultDeepSeekModel
+        : (result['model'] ?? '').trim();
     setState(() {
-      _longcatApiKey = nextValue;
+      _deepSeekBaseUrl = nextBaseUrl;
+      _deepSeekApiKey = nextApiKey;
+      _deepSeekModel = nextModel;
     });
-    await _saveLongcatApiKey(nextValue);
+    await _saveDeepSeekConfig(
+      baseUrl: nextBaseUrl,
+      apiKey: nextApiKey,
+      model: nextModel,
+    );
     _showMessage('已保存');
+  }
+
+  Future<void> _openAiChatPage() async {
+    // 打开独立问答页面，并把当前 DeepSeek 配置传入聊天页。
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => AiChatPage(
+          baseUrl: _deepSeekBaseUrl,
+          apiKey: _deepSeekApiKey,
+          model: _deepSeekModel,
+        ),
+      ),
+    );
   }
 
   @override
@@ -1255,6 +1337,11 @@ class _HomePageState extends State<HomePage>
             ],
           ),
           actions: [
+            IconButton(
+              onPressed: _openAiChatPage,
+              icon: const Icon(Icons.forum_outlined),
+              tooltip: '财小喵',
+            ),
             IconButton(
               onPressed: () {
                 Navigator.of(context)
@@ -1701,10 +1788,12 @@ class _HomePageState extends State<HomePage>
             children: [
               ListTile(
                 leading: const Icon(Icons.smart_toy_outlined),
-                title: const Text('LongCat AK'),
-                subtitle: Text('当前：${_maskApiKey(_longcatApiKey)}'),
+                title: const Text('DeepSeek'),
+                subtitle: Text(
+                  '模型：$_deepSeekModel\n地址：$_deepSeekBaseUrl\n密钥：${_maskApiKey(_deepSeekApiKey)}',
+                ),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: _editLongcatApiKey,
+                onTap: _editDeepSeekConfig,
               ),
             ],
           ),

@@ -1,8 +1,4 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/record_database.dart';
 import '../data/transaction_record.dart';
@@ -47,9 +43,6 @@ class RecordFormSheet extends StatefulWidget {
 
 class _RecordFormSheetState extends State<RecordFormSheet> {
   // 记账类型与金额输入状态
-  static const String _prefKeyLongcatApiKey = 'longcat_api_key';
-  static const String _defaultLongcatApiKey =
-      'ak_1DQ2Mp2d77AD7nr5H840Y4xT2VD5D';
   late String _type;
   late String _amountText;
   late String _leftValue;
@@ -64,7 +57,6 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   late TextEditingController _noteController;
   late TextEditingController _materialNameController;
   late TextEditingController _materialQuantityController;
-  bool _smartAccounting = true;
   bool _saving = false;
   static const String _materialNoteSplitter = '｜';
 
@@ -368,27 +360,10 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
   }
 
   Future<String?> _resolveMaterialName(String inputName) async {
+    // 使用本地匹配方法，返回最多 5 个候选材料
     final materials = await RecordDatabase.instance.fetchBaseMaterials();
     final names = materials.map((item) => item.name).toList();
-    if (_smartAccounting) {
-      final candidates = await _fetchSmartCandidates(inputName, names);
-      if (candidates.isEmpty) {
-        _showMessage('未找到相似材料，请确认是否新增');
-        final created = await _confirmCreateMaterial(inputName);
-        return created ? inputName : null;
-      }
-      final result = await _showMaterialOptions(
-        '智能记账推荐',
-        candidates,
-        inputName: inputName,
-      );
-      if (result == inputName) {
-        final created = await _confirmCreateMaterial(inputName);
-        return created ? inputName : null;
-      }
-      return result;
-    }
-    final candidates = _localMatchCandidates(inputName, names).take(3).toList();
+    final candidates = _localMatchCandidates(inputName, names).take(5).toList();
     if (candidates.isEmpty) {
       _showMessage('未找到相似材料，请确认是否新增');
       final created = await _confirmCreateMaterial(inputName);
@@ -404,137 +379,6 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
       return created ? inputName : null;
     }
     return result;
-  }
-
-  Future<List<String>> _fetchSmartCandidates(
-    String inputName,
-    List<String> baseNames,
-  ) async {
-    final apiKeyFromDefine = const String.fromEnvironment('LONGCAT_API_KEY');
-    final storedKey = await _loadLongcatApiKey();
-    final apiKey = apiKeyFromDefine.isNotEmpty
-        ? apiKeyFromDefine
-        : (Platform.environment['LONGCAT_API_KEY'] ??
-              (storedKey.isNotEmpty ? storedKey : _defaultLongcatApiKey));
-    if (apiKey.trim().isEmpty) {
-      _showMessage('未配置智能记账密钥，已使用本地匹配');
-      return _localMatchCandidates(inputName, baseNames).take(3).toList();
-    }
-    final prompt =
-        '''
-你是材料匹配助手，请从材料列表中找出与用户备注最相近的材料名称。
-要求：
-1. 仅返回 JSON 数组，数组元素为材料名称字符串。
-2. 只能从材料列表中选择，不可编造。
-3. 返回数量最多 5 个。
-材料列表：${baseNames.join('、')}
-用户备注：$inputName
-''';
-    final payload = {
-      'model': 'LongCat-Flash-Chat',
-      'messages': [
-        {'role': 'user', 'content': prompt},
-      ],
-      'temperature': 0.2,
-      'stream': false,
-    };
-
-    // 打印发送给大模型的请求 payload
-    debugPrint('--- AI Request Payload ---');
-    debugPrint(jsonEncode(payload));
-
-    final client = HttpClient();
-    try {
-      final uri = Uri.parse(
-        'https://api.longcat.chat/openai/v1/chat/completions',
-      );
-      final request = await client.postUrl(uri);
-      request.headers.contentType = ContentType.json;
-      request.headers.set('Authorization', 'Bearer $apiKey');
-      request.add(utf8.encode(jsonEncode(payload)));
-      final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
-
-      // 打印大模型的原始返回结果
-      debugPrint('--- AI Response Body ---');
-      debugPrint(body);
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        return _localMatchCandidates(inputName, baseNames).take(3).toList();
-      }
-      final data = jsonDecode(body);
-      String? content;
-      if (data is Map<String, dynamic>) {
-        final choices = data['choices'];
-        if (choices is List && choices.isNotEmpty) {
-          final first = choices.first;
-          if (first is Map<String, dynamic>) {
-            final message = first['message'];
-            if (message is Map<String, dynamic>) {
-              final value = message['content'];
-              if (value is String) {
-                content = value;
-              }
-            }
-          }
-        }
-      }
-      if (content == null) {
-        return _localMatchCandidates(inputName, baseNames).take(3).toList();
-      }
-      final extracted = _extractJsonArray(content);
-      if (extracted == null) {
-        return _localMatchCandidates(inputName, baseNames).take(3).toList();
-      }
-      final rawList = jsonDecode(extracted);
-      if (rawList is! List) {
-        return _localMatchCandidates(inputName, baseNames).take(3).toList();
-      }
-      final baseLower = baseNames.map((e) => e.toLowerCase()).toSet();
-      final options = <String>[];
-      for (final item in rawList) {
-        if (item is! String) {
-          continue;
-        }
-        final trimmed = item.trim();
-        if (trimmed.isEmpty) {
-          continue;
-        }
-        if (!baseLower.contains(trimmed.toLowerCase())) {
-          continue;
-        }
-        if (!options.contains(trimmed)) {
-          options.add(trimmed);
-        }
-        if (options.length >= 5) {
-          break;
-        }
-      }
-      return options;
-    } catch (_) {
-      return _localMatchCandidates(inputName, baseNames).take(3).toList();
-    } finally {
-      client.close();
-    }
-  }
-
-  String? _extractJsonArray(String content) {
-    final trimmed = content.trim();
-    final start = trimmed.indexOf('[');
-    final end = trimmed.lastIndexOf(']');
-    if (start == -1 || end == -1 || end <= start) {
-      return null;
-    }
-    return trimmed.substring(start, end + 1);
-  }
-
-  Future<String> _loadLongcatApiKey() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getString(_prefKeyLongcatApiKey)?.trim() ?? '';
-    } catch (_) {
-      return '';
-    }
   }
 
   List<String> _localMatchCandidates(String inputName, List<String> baseNames) {
@@ -1025,20 +869,6 @@ class _RecordFormSheetState extends State<RecordFormSheet> {
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Checkbox(
-                        value: _smartAccounting,
-                        onChanged: (value) {
-                          setState(() {
-                            _smartAccounting = value ?? true;
-                          });
-                        },
-                      ),
-                      const Text('智能记账'),
                     ],
                   ),
                 ] else ...[
