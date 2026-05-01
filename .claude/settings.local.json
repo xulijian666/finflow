@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git pull *)",
+      "Bash(git stash *)",
+      "Bash(git commit *)",
+      "Bash(flutter analyze *)",
+      "Bash(flutter build *)",
+      "Bash(git config *)"
+    ]
+  }
+}

@@ -8,6 +8,7 @@ import 'package:excel/excel.dart' as excel;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -34,6 +35,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     '每组数量',
     '每组学生人数',
   ];
+  static const String _historyPrefsKey = 'course_export_history';
   final Map<String, TextEditingController> _studentControllers = {};
   final Map<String, TextEditingController> _teacherControllers = {};
   final List<_ExportHistoryItem> _historyRecords = [];
@@ -41,6 +43,12 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
   String? _sourceFileName;
   bool _calculating = false;
   List<String> _grades = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistoryRecords();
+  }
 
   @override
   void dispose() {
@@ -392,7 +400,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     _appendDebug('开始获取材料单价');
     await _fetchAndApplyUnitPrices(courseCostMap);
 
-    // 暂不排序，在写入成本计算Sheet时按每生成本排序
+    // 暂不排序，在写入成本计算Sheet时按材料总价排序
     final courseCosts = courseCostMap.values.toList();
 
     final sourceRows = rows
@@ -612,7 +620,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       );
     }
 
-    // 成本计算Sheet：按年级-课程汇总成本，按每生成本从高到低排序
+    // 成本计算Sheet：按年级-课程汇总成本，按材料总价从高到低排序
     final costSheet = workbook['成本计算'];
     _appendSheetRow(
       sheet: costSheet,
@@ -628,30 +636,19 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         '老师人数',
         '每生成本',
         '师均成本',
-        '人均成本',
-        '生师比',
         '最高材料占比',
-        '集中度指数',
         '最大成本项',
         '健康度评分',
         '健康度评语',
         '备注（材料名称:单价）',
       ],
     );
-    // 按每生成本从高到低排序
+    // 按材料总价从高到低排序
     final sortedCosts = aggregate.courseCosts.toList()
       ..sort((a, b) {
         final aTotal = a.teacherCost + a.studentCost;
         final bTotal = b.teacherCost + b.studentCost;
-        final aStudentCount = peopleCounts[a.grade]!['学生'] ?? 0;
-        final bStudentCount = peopleCounts[b.grade]!['学生'] ?? 0;
-        final aCostPerStudent = aStudentCount > 0
-            ? aTotal / aStudentCount
-            : 0.0;
-        final bCostPerStudent = bStudentCount > 0
-            ? bTotal / bStudentCount
-            : 0.0;
-        return bCostPerStudent.compareTo(aCostPerStudent);
+        return bTotal.compareTo(aTotal);
       });
     for (var i = 0; i < sortedCosts.length; i++) {
       final costItem = sortedCosts[i];
@@ -660,11 +657,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       final teacherCount = peopleCounts[costItem.grade]!['老师'] ?? 0;
       final costPerStudent = studentCount > 0 ? totalCost / studentCount : 0.0;
       final costPerTeacher = teacherCount > 0 ? totalCost / teacherCount : 0.0;
-      final totalPeople = studentCount + teacherCount;
-      final costPerPerson = totalPeople > 0 ? totalCost / totalPeople : 0.0;
-      final studentTeacherRatio = teacherCount > 0
-          ? studentCount / teacherCount
-          : 0.0;
       // 计算成本结构分析指标
       final materialCosts = <String, double>{};
       for (final detail in costItem.materialDetails) {
@@ -684,7 +676,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           }
         }
       }
-      // 集中度指数（HHI）：各材料占比的平方和，接近1表示高度集中
+      // 集中度指数（HHI）：各材料占比的平方和，用于健康度评分分析
       double hhi = 0.0;
       if (totalCost > 0) {
         for (final cost in materialCosts.values) {
@@ -692,10 +684,15 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           hhi += ratio * ratio;
         }
       }
-      // 健康度评分（基于集中度和最高占比）
+      // 健康度评分（基于最高材料占比和集中度指数）
       String healthScore = '';
       String healthComment = '';
-      if (highestRatio >= 0.7 || hhi >= 0.6) {
+      // 判断是否有任何材料单价为0（未采购）
+      final hasZeroPrice = costItem.materialDetails.any((d) => d.unitPrice == 0);
+      if (hasZeroPrice) {
+        healthScore = '❓ 无法计算';
+        healthComment = '存在单价为0的材料，可能未采购，成本数据不准确';
+      } else if (highestRatio >= 0.7 || hhi >= 0.6) {
         healthScore = '❌ 差';
         healthComment = '成本高度集中于${highestCostMaterial}，需重点优化';
       } else if (highestRatio >= 0.5 || hhi >= 0.4) {
@@ -710,6 +707,9 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       }
       // 生成材料明细备注
       final materialNotes = costItem.materialDetails
+          .toList()
+          ..sort((a, b) => b.unitPrice.compareTo(a.unitPrice));
+      final materialNotesStr = materialNotes
           .map((d) => '${d.materialName}:${_formatNumber(d.unitPrice)}')
           .toSet()
           .join('，');
@@ -728,14 +728,11 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           teacherCount,
           _formatNumber(costPerStudent),
           _formatNumber(costPerTeacher),
-          _formatNumber(costPerPerson),
-          _formatNumber(studentTeacherRatio),
           '${_formatNumber(highestRatio * 100)}%',
-          _formatNumber(hhi),
           highestCostMaterial,
           healthScore,
           healthComment,
-          materialNotes,
+          materialNotesStr,
         ],
       );
     }
@@ -748,10 +745,11 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       throw Exception('导出失败');
     }
     final frozenBytes = _freezeHeaderRows(bytes);
+    final richBytes = _enrichTextCells(frozenBytes);
     final directory = await _exportDirectory();
     final fileName = '课程出库导出_${_formatDateTime(DateTime.now())}.xlsx';
     final exportFile = File(p.join(directory.path, fileName));
-    await exportFile.writeAsBytes(frozenBytes, flush: true);
+    await exportFile.writeAsBytes(richBytes, flush: true);
     _appendDebug('xlsx写入完成: ${exportFile.path}');
     return exportFile.path;
   }
@@ -760,7 +758,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     if (value % 1 == 0) {
       return value.toInt();
     }
-    return double.parse(value.toStringAsFixed(4));
+    return double.parse(value.toStringAsFixed(2));
   }
 
   excel.Data? _cellAt(List<excel.Data?> row, int index) {
@@ -915,6 +913,10 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     if (sheet.maxRows <= 0 || sheet.maxCols <= 0) {
       return;
     }
+    final border = excel.Border(
+      borderStyle: excel.BorderStyle.Thin,
+      borderColorHex: '#FF666666',
+    );
     final highlightColumns = <int>{};
     final healthScoreColumns = <int>{};
     final remainingInventoryColumns = <int>{};
@@ -934,21 +936,45 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       }
     }
     // 健康度颜色样式
+    final healthUnknownStyle = excel.CellStyle(
+      fontColorHex: '#FF757575',
+      bold: true,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
     final healthBadStyle = excel.CellStyle(
       fontColorHex: '#FF8B0000',
       bold: true,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
     );
     final healthMidStyle = excel.CellStyle(
       fontColorHex: '#FF996600',
       bold: true,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
     );
     final healthGoodStyle = excel.CellStyle(
       fontColorHex: '#FF2E7D32',
       bold: true,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
     );
     final healthExcellentStyle = excel.CellStyle(
       fontColorHex: '#FF1B5E20',
       bold: true,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
     );
     final nonPositiveInventoryStyle = excel.CellStyle(
       fontColorHex: '#FF8B0000',
@@ -974,6 +1000,8 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           final cellText = _valueText(cell.value) ?? '';
           if (cellText.contains('差')) {
             cell.cellStyle = healthBadStyle;
+          } else if (cellText.contains('无法计算')) {
+            cell.cellStyle = healthUnknownStyle;
           } else if (cellText.contains('中')) {
             cell.cellStyle = healthMidStyle;
           } else if (cellText.contains('良')) {
@@ -1085,6 +1113,80 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     return '${xml.substring(0, index)}$pane${xml.substring(index)}';
   }
 
+  List<int> _enrichTextCells(List<int> xlsxBytes) {
+    final archive = ZipDecoder().decodeBytes(xlsxBytes);
+    for (var i = 0; i < archive.length; i++) {
+      final file = archive[i];
+      if (!file.isFile) continue;
+      if (file.name != 'xl/sharedStrings.xml') continue;
+
+      final xml = utf8.decode(file.content);
+      final updated = _enrichTextInSharedStrings(xml);
+      if (updated == xml) continue;
+
+      final updatedBytes = utf8.encode(updated);
+      final replaced =
+          ArchiveFile(file.name, updatedBytes.length, updatedBytes)
+            ..mode = file.mode
+            ..ownerId = file.ownerId
+            ..groupId = file.groupId
+            ..lastModTime = file.lastModTime
+            ..comment = file.comment
+            ..crc32 = file.crc32
+            ..compress = file.compress
+            ..isFile = file.isFile;
+      archive[i] = replaced;
+    }
+    return ZipEncoder().encode(archive) ?? xlsxBytes;
+  }
+
+  String _enrichTextInSharedStrings(String xml) {
+    // 匹配材料备注格式："材料名:价格，材料名:价格，..."
+    final ssPattern = RegExp(
+      r'<si><t xml:space="preserve">(([^<]*[，][^<]*)+)</t></si>',
+    );
+
+    return xml.replaceAllMapped(ssPattern, (match) {
+      final text = match.group(1)!;
+      // 仅处理包含"数字:数字"模式的条目（材料备注）
+      if (!RegExp(r'\d+\.?\d*:\d+\.?\d*').hasMatch(text) &&
+          !RegExp(r'[一-鿿]+:\d+\.?\d*').hasMatch(text)) {
+        return match.group(0)!;
+      }
+
+      final entries = text.split('，');
+      final buffer = StringBuffer('<si>');
+
+      for (var j = 0; j < entries.length; j++) {
+        if (j > 0) {
+          buffer.write(
+              '<r><rPr><color rgb="FF999999"/></rPr><t xml:space="preserve">，</t></r>');
+        }
+
+        final entry = entries[j];
+        final colonIndex = entry.lastIndexOf(':');
+        if (colonIndex <= 0) {
+          buffer.write(
+              '<r><t xml:space="preserve">$entry</t></r>');
+          continue;
+        }
+
+        final name = entry.substring(0, colonIndex);
+        final price = entry.substring(colonIndex);
+
+        // 材料名称：蓝色加粗
+        buffer.write(
+            '<r><rPr><b/><color rgb="FF2E75B6"/></rPr><t xml:space="preserve">$name</t></r>');
+        // 单价：深红色
+        buffer.write(
+            '<r><rPr><color rgb="FFCC0000"/></rPr><t xml:space="preserve">$price</t></r>');
+      }
+
+      buffer.write('</si>');
+      return buffer.toString();
+    });
+  }
+
   void _appendDebug(String message) {
     final now = DateTime.now();
     final line =
@@ -1127,12 +1229,47 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     }
   }
 
+  Future<void> _loadHistoryRecords() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString(_historyPrefsKey);
+      debugPrint('加载历史记录: key=$_historyPrefsKey, 数据长度=${jsonStr?.length ?? 0}');
+      if (jsonStr != null && jsonStr.isNotEmpty) {
+        final List<dynamic> jsonList = jsonDecode(jsonStr);
+        debugPrint('解析到 ${jsonList.length} 条历史记录');
+        _historyRecords.clear();
+        for (final json in jsonList) {
+          _historyRecords.add(_ExportHistoryItem.fromJson(json));
+        }
+        _historyRecords.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        if (mounted) {
+          setState(() {});
+        }
+      }
+    } catch (e) {
+      debugPrint('加载历史记录失败: $e');
+    }
+  }
+
+  Future<void> _saveHistoryRecords() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = _historyRecords.map((item) => item.toJson()).toList();
+      final jsonStr = jsonEncode(jsonList);
+      await prefs.setString(_historyPrefsKey, jsonStr);
+      debugPrint('保存历史记录成功: ${_historyRecords.length} 条, 数据长度=${jsonStr.length}');
+    } catch (e) {
+      debugPrint('保存历史记录失败: $e');
+    }
+  }
+
   void _addHistoryRecord(_ExportHistoryItem item) {
     _historyRecords.add(item);
     _historyRecords.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     if (_historyRecords.length > 3) {
       _historyRecords.removeRange(3, _historyRecords.length);
     }
+    _saveHistoryRecords();
   }
 
   String _formatHistoryDateTime(DateTime date) {
@@ -1385,6 +1522,37 @@ class _ExportHistoryItem {
   final String fileName;
   final String sourceFileName;
   final Map<String, Map<String, int>> peopleCounts;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'createdAt': createdAt.toIso8601String(),
+      'filePath': filePath,
+      'fileName': fileName,
+      'sourceFileName': sourceFileName,
+      'peopleCounts': peopleCounts,
+    };
+  }
+
+  factory _ExportHistoryItem.fromJson(Map<String, dynamic> json) {
+    final peopleCountsMap = <String, Map<String, int>>{};
+    final rawPeopleCounts = json['peopleCounts'] as Map<String, dynamic>;
+    for (final entry in rawPeopleCounts.entries) {
+      final gradeMap = <String, int>{};
+      final rawGradeMap = entry.value as Map<String, dynamic>;
+      for (final gradeEntry in rawGradeMap.entries) {
+        gradeMap[gradeEntry.key] = gradeEntry.value as int;
+      }
+      peopleCountsMap[entry.key] = gradeMap;
+    }
+
+    return _ExportHistoryItem(
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      filePath: json['filePath'] as String,
+      fileName: json['fileName'] as String,
+      sourceFileName: json['sourceFileName'] as String,
+      peopleCounts: peopleCountsMap,
+    );
+  }
 }
 
 class _AggregateResult {
