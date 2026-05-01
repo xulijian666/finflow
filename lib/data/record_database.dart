@@ -137,6 +137,45 @@ class InventoryOutRecord {
   }
 }
 
+class InventoryOutBatch {
+  InventoryOutBatch({
+    this.id,
+    this.batchName,
+    this.sourceFileName,
+    required this.createdAt,
+    this.note,
+    this.itemCount,
+  });
+
+  final int? id;
+  final String? batchName;
+  final String? sourceFileName;
+  final String createdAt;
+  final String? note;
+  final int? itemCount;
+
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'batch_name': batchName,
+      'source_file_name': sourceFileName,
+      'created_at': createdAt,
+      'note': note,
+    };
+  }
+
+  static InventoryOutBatch fromMap(Map<String, Object?> map) {
+    return InventoryOutBatch(
+      id: map['id'] as int?,
+      batchName: map['batch_name'] as String?,
+      sourceFileName: map['source_file_name'] as String?,
+      createdAt: map['created_at'] as String,
+      note: map['note'] as String?,
+      itemCount: (map['item_count'] as num?)?.toInt(),
+    );
+  }
+}
+
 class InventoryDetailRecord {
   InventoryDetailRecord({
     required this.id,
@@ -170,13 +209,14 @@ class RecordDatabase {
 
   static const String _dbName = 'finflow.db';
   // 数据库版本升级用于触发表结构更新
-  static const int _dbVersion = 8;
+  static const int _dbVersion = 9;
   static const String _tableName = 'records';
   static const String _billTableName = 'bills';
   static const String _accountTableName = 'accounts';
   static const String _baseMaterialTableName = 'base_materials';
   static const String _inventoryTableName = 'inventory_records';
   static const String _inventoryOutTableName = 'inventory_out_records';
+  static const String _inventoryOutBatchTableName = 'inventory_out_batches';
   static const String _projectMaterialRelationTableName =
       'project_material_relations';
   static const String defaultAccountName = '默认账户';
@@ -287,7 +327,17 @@ class RecordDatabase {
         quantity REAL NOT NULL,
         unit TEXT,
         note TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        batch_id INTEGER
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_inventoryOutBatchTableName (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_name TEXT,
+        source_file_name TEXT,
+        created_at TEXT NOT NULL,
+        note TEXT
       )
     ''');
     await db.execute('''
@@ -323,6 +373,12 @@ class RecordDatabase {
       _baseMaterialTableName,
       'init_quantity',
       'REAL NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(
+      db,
+      _inventoryOutTableName,
+      'batch_id',
+      'INTEGER',
     );
     await db.execute('DROP TABLE IF EXISTS inventory_init_records');
     await db.execute('DROP TABLE IF EXISTS reimbursements');
@@ -1361,6 +1417,7 @@ class RecordDatabase {
     String? unit,
     String? note,
     DateTime? outDate,
+    int? batchId,
   }) async {
     final db = await database;
     final record = InventoryOutRecord(
@@ -1370,7 +1427,11 @@ class RecordDatabase {
       note: note,
       createdAt: (outDate ?? DateTime.now()).toIso8601String(),
     );
-    return db.insert(_inventoryOutTableName, record.toMap());
+    final map = record.toMap();
+    if (batchId != null) {
+      map['batch_id'] = batchId;
+    }
+    return db.insert(_inventoryOutTableName, map);
   }
 
   Future<void> updateOutRecord({
@@ -1397,6 +1458,79 @@ class RecordDatabase {
   Future<void> deleteOutRecord(int id) async {
     final db = await database;
     await db.delete(_inventoryOutTableName, where: 'id = ?', whereArgs: [id]);
+  }
+
+  // 批次相关方法
+  Future<int> insertOutBatch({
+    String? batchName,
+    String? sourceFileName,
+    String? note,
+  }) async {
+    final db = await database;
+    final batch = InventoryOutBatch(
+      batchName: batchName,
+      sourceFileName: sourceFileName,
+      createdAt: DateTime.now().toIso8601String(),
+      note: note,
+    );
+    return db.insert(_inventoryOutBatchTableName, batch.toMap());
+  }
+
+  Future<List<InventoryOutBatch>> fetchOutBatches() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT b.*,
+             COUNT(r.id) AS item_count
+      FROM $_inventoryOutBatchTableName b
+      LEFT JOIN $_inventoryOutTableName r ON r.batch_id = b.id
+      GROUP BY b.id
+      ORDER BY b.created_at DESC
+    ''');
+    return rows.map(InventoryOutBatch.fromMap).toList();
+  }
+
+  Future<List<InventoryOutRecord>> fetchOutRecordsByBatch(int batchId) async {
+    final db = await database;
+    final maps = await db.query(
+      _inventoryOutTableName,
+      where: 'batch_id = ?',
+      whereArgs: [batchId],
+      orderBy: 'id ASC',
+    );
+    return maps.map(InventoryOutRecord.fromMap).toList();
+  }
+
+  Future<int> deleteOutBatch(int batchId) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      await txn.delete(
+        _inventoryOutTableName,
+        where: 'batch_id = ?',
+        whereArgs: [batchId],
+      );
+      final deleted = await txn.delete(
+        _inventoryOutBatchTableName,
+        where: 'id = ?',
+        whereArgs: [batchId],
+      );
+      return deleted;
+    });
+  }
+
+  Future<InventoryOutBatch?> fetchOutBatchById(int batchId) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT b.*,
+             COUNT(r.id) AS item_count
+      FROM $_inventoryOutBatchTableName b
+      LEFT JOIN $_inventoryOutTableName r ON r.batch_id = b.id
+      WHERE b.id = ?
+      GROUP BY b.id
+    ''', [batchId]);
+    if (rows.isEmpty) {
+      return null;
+    }
+    return InventoryOutBatch.fromMap(rows.first);
   }
 
   Future<int> createReimbursement(

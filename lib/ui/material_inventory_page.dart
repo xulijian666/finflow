@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
 import 'package:file_picker/file_picker.dart';
@@ -10,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/record_database.dart';
+import 'batch_outbound_page.dart';
 
 class MaterialInventoryPage extends StatefulWidget {
   const MaterialInventoryPage({super.key});
@@ -23,7 +23,6 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
   List<InventorySummary> _inventoryList = [];
   bool _isLoading = true;
   bool _isExporting = false;
-  bool _isImporting = false;
   bool _isTemplateExporting = false;
 
   @override
@@ -55,6 +54,15 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  Future<void> _navigateToBatchOutbound() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const BatchOutboundPage(),
+      ),
+    );
+    _loadData();
   }
 
   Future<void> _exportInventory() async {
@@ -207,15 +215,9 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
         title: const Text('材料库存查询'),
         actions: [
           TextButton(
-            onPressed: _isImporting ? null : _importOutStock,
+            onPressed: _navigateToBatchOutbound,
             style: TextButton.styleFrom(foregroundColor: colorScheme.primary),
-            child: _isImporting
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('批量出库'),
+            child: const Text('批量出库'),
           ),
           TextButton(
             onPressed: _isTemplateExporting ? null : _exportOutTemplate,
@@ -451,232 +453,11 @@ class _MaterialInventoryPageState extends State<MaterialInventoryPage> {
         .replaceAll(RegExp(r"\.$"), "");
   }
 
-  Future<void> _importOutStock() async {
-    setState(() {
-      _isImporting = true;
-    });
-    try {
-      final bytes = await _pickImportFile();
-      if (bytes == null) {
-        return;
-      }
-      final workbook = Excel.decodeBytes(bytes);
-      Sheet? sheet = workbook.tables['Sheet1'];
-      sheet ??= workbook.tables.isEmpty ? null : workbook.tables.values.first;
-      if (sheet == null || sheet.rows.isEmpty) {
-        _showMessage('未读取到数据');
-        return;
-      }
-      final headerRow = sheet.rows.first;
-      final headerIndex = <String, int>{};
-      for (var i = 0; i < headerRow.length; i++) {
-        final title = _cellString(headerRow, i);
-        if (title.isNotEmpty) {
-          headerIndex[title] = i;
-        }
-      }
-      final nameIndex = headerIndex['材料名称'];
-      final quantityIndex = headerIndex['出库数量'] ?? headerIndex['数量'];
-      if (nameIndex == null || quantityIndex == null) {
-        _showMessage('模板缺少材料名称或出库数量列');
-        return;
-      }
-      final noteIndex = headerIndex['出库备注'] ?? headerIndex['备注'];
-      final dateIndex = headerIndex['出库日期'] ?? headerIndex['日期'];
-      final baseMaterials = await RecordDatabase.instance.fetchBaseMaterials();
-      final materialMap = {
-        for (final item in baseMaterials) item.name: item.unit,
-      };
-      final detailList = <Map<String, Object?>>[];
-      final missingNames = <String>{};
-      for (var i = 1; i < sheet.rows.length; i++) {
-        final row = sheet.rows[i];
-        final name = _cellString(row, nameIndex);
-        if (name.isEmpty) {
-          continue;
-        }
-        if (!materialMap.containsKey(name)) {
-          missingNames.add(name);
-          continue;
-        }
-        final quantity = _cellDouble(row, quantityIndex);
-        if (quantity == null || quantity <= 0) {
-          continue;
-        }
-        final note = noteIndex == null ? '' : _cellString(row, noteIndex);
-        final date = dateIndex == null ? null : _cellDate(row, dateIndex);
-        detailList.add({
-          'name': name,
-          'quantity': quantity,
-          'note': note,
-          'date': date,
-        });
-      }
-      if (missingNames.isNotEmpty) {
-        await _showBlockDialog('导入失败', '以下材料不在基础材料中：${missingNames.join('、')}');
-        return;
-      }
-      if (detailList.isEmpty) {
-        _showMessage('没有可导入的数据');
-        return;
-      }
-      final summaryList = await RecordDatabase.instance.fetchInventorySummary();
-      final remainingMap = {
-        for (final item in summaryList)
-          item.materialName: item.remainingQuantity,
-      };
-      final outByName = <String, double>{};
-      for (final detail in detailList) {
-        final name = detail['name'] as String;
-        final quantity = detail['quantity'] as double;
-        outByName[name] = (outByName[name] ?? 0) + quantity;
-      }
-      final insufficientDetails = <String>[];
-      outByName.forEach((name, quantity) {
-        final remaining = remainingMap[name] ?? 0;
-        if (remaining < quantity) {
-          insufficientDetails.add(
-            '$name：现有${remaining.toStringAsFixed(2)}，需出库${quantity.toStringAsFixed(2)}',
-          );
-        }
-      });
-      if (insufficientDetails.isNotEmpty) {
-        final confirmed = await _showConfirmDialog(
-          '库存不足',
-          '${insufficientDetails.join('\n')}\n库存不足，是否仍然出库？',
-        );
-        if (!confirmed) {
-          return;
-        }
-      }
-      var inserted = 0;
-      for (final detail in detailList) {
-        final name = detail['name'] as String;
-        final quantity = detail['quantity'] as double;
-        final note = detail['note'] as String;
-        final date = detail['date'] as DateTime? ?? DateTime.now();
-        await RecordDatabase.instance.insertOutRecord(
-          materialName: name,
-          quantity: quantity,
-          unit: materialMap[name],
-          note: note.isEmpty ? null : note,
-          outDate: date,
-        );
-        inserted += 1;
-      }
-      _showMessage('导入完成：成功 $inserted 条');
-      _loadData();
-    } catch (_) {
-      _showMessage('导入失败，请重试');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isImporting = false;
-        });
-      }
-    }
-  }
-
-  Future<Uint8List?> _pickImportFile() async {
-    final selection = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['xlsx'],
-      withData: true,
-    );
-    if (selection == null || selection.files.isEmpty) {
-      return null;
-    }
-    final file = selection.files.single;
-    if (file.bytes != null) {
-      return file.bytes;
-    }
-    final path = file.path;
-    if (path == null) {
-      return null;
-    }
-    return File(path).readAsBytes();
-  }
-
-  String _cellString(List<Data?> row, int index) {
-    if (index < 0 || index >= row.length) {
-      return '';
-    }
-    final value = row[index]?.value;
-    if (value == null) {
-      return '';
-    }
-    return value.toString().trim();
-  }
-
-  double? _cellDouble(List<Data?> row, int index) {
-    if (index < 0 || index >= row.length) {
-      return null;
-    }
-    final value = row[index]?.value;
-    if (value is num) {
-      return value.toDouble();
-    }
-    if (value == null) {
-      return null;
-    }
-    return double.tryParse(value.toString().trim());
-  }
-
-  DateTime? _cellDate(List<Data?> row, int index) {
-    if (index < 0 || index >= row.length) {
-      return null;
-    }
-    final value = row[index]?.value;
-    if (value is DateTime) {
-      return value;
-    }
-    if (value == null) {
-      return null;
-    }
-    final text = value.toString().trim();
-    if (text.isEmpty) {
-      return null;
-    }
-    if (text.contains('/')) {
-      final parts = text.split('/');
-      if (parts.length >= 3) {
-        final year = int.tryParse(parts[0].trim());
-        final month = int.tryParse(parts[1].trim());
-        final day = int.tryParse(parts[2].trim());
-        if (year != null && month != null && day != null) {
-          return DateTime(year, month, day);
-        }
-      }
-    }
-    return DateTime.tryParse(text);
-  }
-
   void _showMessage(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  Future<void> _showBlockDialog(String title, String message) async {
-    if (!mounted) {
-      return;
-    }
-    await showDialog<void>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('确定'),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   Future<bool> _showConfirmDialog(String title, String message) async {

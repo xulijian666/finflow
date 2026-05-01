@@ -1338,11 +1338,6 @@ class _HomePageState extends State<HomePage>
           ),
           actions: [
             IconButton(
-              onPressed: _openAiChatPage,
-              icon: const Icon(Icons.forum_outlined),
-              tooltip: '财小喵',
-            ),
-            IconButton(
               onPressed: () {
                 Navigator.of(context)
                     .push(
