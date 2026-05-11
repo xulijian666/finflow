@@ -4,6 +4,7 @@ import 'material_inventory_page.dart';
 import 'material_inventory_init_page.dart';
 import 'base_materials_page.dart';
 import 'course_outbound_import_page.dart';
+import 'material_bill_batch_import_page.dart';
 import 'project_material_relation_page.dart';
 
 // 扩展功能入口页
@@ -51,6 +52,12 @@ class ExtensionMenuPage extends StatelessWidget {
         subtitle: '筛选后导出账单',
         icon: Icons.file_download_outlined,
         action: 'bill_export',
+      ),
+      ExtensionMenuItem(
+        title: '批量导入材料账单',
+        subtitle: '下载模板后批量生成材料采购账单',
+        icon: Icons.post_add_outlined,
+        builder: (context) => const MaterialBillBatchImportPage(),
       ),
     ];
 

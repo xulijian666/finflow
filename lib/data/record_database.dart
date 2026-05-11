@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -176,6 +175,106 @@ class InventoryOutBatch {
   }
 }
 
+class MaterialBillImportBatch {
+  MaterialBillImportBatch({
+    this.id,
+    required this.billId,
+    required this.accountId,
+    required this.billName,
+    required this.accountName,
+    required this.recordDate,
+    required this.createdAt,
+    this.note,
+    this.sourceFileName,
+    this.itemCount,
+    this.totalAmount,
+  });
+
+  final int? id;
+  final int billId;
+  final int accountId;
+  final String billName;
+  final String accountName;
+  final String recordDate;
+  final String createdAt;
+  final String? note;
+  final String? sourceFileName;
+  final int? itemCount;
+  final double? totalAmount;
+
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'bill_id': billId,
+      'account_id': accountId,
+      'bill_name': billName,
+      'account_name': accountName,
+      'record_date': recordDate,
+      'created_at': createdAt,
+      'note': note,
+      'source_file_name': sourceFileName,
+    };
+  }
+
+  static MaterialBillImportBatch fromMap(Map<String, Object?> map) {
+    return MaterialBillImportBatch(
+      id: map['id'] as int?,
+      billId: map['bill_id'] as int,
+      accountId: map['account_id'] as int,
+      billName: map['bill_name'] as String? ?? '',
+      accountName: map['account_name'] as String? ?? '',
+      recordDate: map['record_date'] as String,
+      createdAt: map['created_at'] as String,
+      note: map['note'] as String?,
+      sourceFileName: map['source_file_name'] as String?,
+      itemCount: (map['item_count'] as num?)?.toInt(),
+      totalAmount: (map['total_amount'] as num?)?.toDouble(),
+    );
+  }
+}
+
+class MaterialBillImportItem {
+  MaterialBillImportItem({
+    this.id,
+    this.batchId,
+    this.recordId,
+    required this.materialName,
+    required this.quantity,
+    required this.totalAmount,
+    this.unit,
+  });
+
+  final int? id;
+  final int? batchId;
+  final int? recordId;
+  final String materialName;
+  final double quantity;
+  final double totalAmount;
+  final String? unit;
+
+  static MaterialBillImportItem fromMap(Map<String, Object?> map) {
+    return MaterialBillImportItem(
+      id: map['id'] as int?,
+      batchId: map['batch_id'] as int?,
+      recordId: map['record_id'] as int?,
+      materialName: map['material_name'] as String,
+      quantity: (map['quantity'] as num).toDouble(),
+      totalAmount: (map['total_amount'] as num).toDouble(),
+      unit: map['unit'] as String?,
+    );
+  }
+}
+
+class MaterialBillImportResult {
+  MaterialBillImportResult({
+    required this.batchId,
+    required this.clearedInitMaterialNames,
+  });
+
+  final int batchId;
+  final List<String> clearedInitMaterialNames;
+}
+
 class InventoryDetailRecord {
   InventoryDetailRecord({
     required this.id,
@@ -209,7 +308,7 @@ class RecordDatabase {
 
   static const String _dbName = 'finflow.db';
   // 数据库版本升级用于触发表结构更新
-  static const int _dbVersion = 9;
+  static const int _dbVersion = 10;
   static const String _tableName = 'records';
   static const String _billTableName = 'bills';
   static const String _accountTableName = 'accounts';
@@ -217,6 +316,10 @@ class RecordDatabase {
   static const String _inventoryTableName = 'inventory_records';
   static const String _inventoryOutTableName = 'inventory_out_records';
   static const String _inventoryOutBatchTableName = 'inventory_out_batches';
+  static const String _materialBillImportBatchTableName =
+      'material_bill_import_batches';
+  static const String _materialBillImportItemTableName =
+      'material_bill_import_items';
   static const String _projectMaterialRelationTableName =
       'project_material_relations';
   static const String defaultAccountName = '默认账户';
@@ -340,6 +443,7 @@ class RecordDatabase {
         note TEXT
       )
     ''');
+    await _createMaterialBillImportTables(db);
     await db.execute('''
       CREATE TABLE IF NOT EXISTS $_projectMaterialRelationTableName (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -374,14 +478,36 @@ class RecordDatabase {
       'init_quantity',
       'REAL NOT NULL DEFAULT 0',
     );
-    await _ensureColumn(
-      db,
-      _inventoryOutTableName,
-      'batch_id',
-      'INTEGER',
-    );
+    await _ensureColumn(db, _inventoryOutTableName, 'batch_id', 'INTEGER');
     await db.execute('DROP TABLE IF EXISTS inventory_init_records');
     await db.execute('DROP TABLE IF EXISTS reimbursements');
+  }
+
+  Future<void> _createMaterialBillImportTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_materialBillImportBatchTableName (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bill_id INTEGER NOT NULL,
+        account_id INTEGER NOT NULL,
+        bill_name TEXT NOT NULL,
+        account_name TEXT NOT NULL,
+        record_date TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        note TEXT,
+        source_file_name TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_materialBillImportItemTableName (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_id INTEGER NOT NULL,
+        record_id INTEGER NOT NULL,
+        material_name TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        total_amount REAL NOT NULL,
+        unit TEXT
+      )
+    ''');
   }
 
   Future<void> _ensureColumn(
@@ -415,6 +541,7 @@ class RecordDatabase {
         UNIQUE(project_name, grade_name, course_name, material_name)
       )
     ''');
+    await _createMaterialBillImportTables(db);
     final bills = await db.query(_billTableName, orderBy: 'id ASC');
     if (bills.isEmpty) {
       final id = await db.insert(_billTableName, {
@@ -1519,18 +1646,216 @@ class RecordDatabase {
 
   Future<InventoryOutBatch?> fetchOutBatchById(int batchId) async {
     final db = await database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT b.*,
              COUNT(r.id) AS item_count
       FROM $_inventoryOutBatchTableName b
       LEFT JOIN $_inventoryOutTableName r ON r.batch_id = b.id
       WHERE b.id = ?
       GROUP BY b.id
-    ''', [batchId]);
+    ''',
+      [batchId],
+    );
     if (rows.isEmpty) {
       return null;
     }
     return InventoryOutBatch.fromMap(rows.first);
+  }
+
+  Future<MaterialBillImportResult> importMaterialBillBatch({
+    required int billId,
+    required int accountId,
+    required String billName,
+    required String accountName,
+    required DateTime recordDate,
+    required List<MaterialBillImportItem> items,
+    String? note,
+    String? sourceFileName,
+  }) async {
+    if (items.isEmpty) {
+      return MaterialBillImportResult(
+        batchId: 0,
+        clearedInitMaterialNames: const [],
+      );
+    }
+    final db = await database;
+    final createdAt = DateTime.now().toIso8601String();
+    return db.transaction((txn) async {
+      final batch = MaterialBillImportBatch(
+        billId: billId,
+        accountId: accountId,
+        billName: billName,
+        accountName: accountName,
+        recordDate: recordDate.toIso8601String(),
+        createdAt: createdAt,
+        note: note,
+        sourceFileName: sourceFileName,
+      );
+      final batchId = await txn.insert(
+        _materialBillImportBatchTableName,
+        batch.toMap(),
+      );
+      final materialNames = <String>{};
+      for (final item in items) {
+        materialNames.add(item.materialName);
+        final quantityText = _formatCompactNumber(item.quantity);
+        final record = TransactionRecord(
+          billId: billId,
+          accountId: accountId,
+          type: 'expense',
+          amount: item.totalAmount,
+          category: '课程材料',
+          date: recordDate,
+          note: '${item.materialName}｜$quantityText',
+          quantity: item.quantity,
+        );
+        final recordId = await txn.insert(_tableName, record.toMap());
+        await txn.insert(_inventoryTableName, {
+          'material_name': item.materialName,
+          'quantity': item.quantity,
+          'unit': item.unit,
+          'record_id': recordId,
+          'created_at': createdAt,
+        });
+        await txn.insert(_materialBillImportItemTableName, {
+          'batch_id': batchId,
+          'record_id': recordId,
+          'material_name': item.materialName,
+          'quantity': item.quantity,
+          'total_amount': item.totalAmount,
+          'unit': item.unit,
+        });
+      }
+      final clearedInitMaterialNames = <String>[];
+      for (final materialName in materialNames) {
+        final rows = await txn.query(
+          _baseMaterialTableName,
+          columns: ['init_quantity'],
+          where: 'name = ?',
+          whereArgs: [materialName],
+          limit: 1,
+        );
+        final initQuantity = rows.isEmpty
+            ? 0.0
+            : (rows.first['init_quantity'] as num?)?.toDouble() ?? 0.0;
+        if (initQuantity > 0) {
+          await txn.update(
+            _baseMaterialTableName,
+            {'init_quantity': 0},
+            where: 'name = ?',
+            whereArgs: [materialName],
+          );
+          clearedInitMaterialNames.add(materialName);
+        }
+      }
+      clearedInitMaterialNames.sort();
+      return MaterialBillImportResult(
+        batchId: batchId,
+        clearedInitMaterialNames: clearedInitMaterialNames,
+      );
+    });
+  }
+
+  Future<List<MaterialBillImportBatch>> fetchMaterialBillImportBatches() async {
+    final db = await database;
+    await _createMaterialBillImportTables(db);
+    final rows = await db.rawQuery('''
+      SELECT b.*,
+             COUNT(i.id) AS item_count,
+             COALESCE(SUM(i.total_amount), 0) AS total_amount
+      FROM $_materialBillImportBatchTableName b
+      LEFT JOIN $_materialBillImportItemTableName i ON i.batch_id = b.id
+      GROUP BY b.id
+      ORDER BY b.created_at DESC, b.id DESC
+    ''');
+    return rows.map(MaterialBillImportBatch.fromMap).toList();
+  }
+
+  Future<List<MaterialBillImportItem>> fetchMaterialBillImportItemsByBatch(
+    int batchId,
+  ) async {
+    final db = await database;
+    final rows = await db.query(
+      _materialBillImportItemTableName,
+      where: 'batch_id = ?',
+      whereArgs: [batchId],
+      orderBy: 'id ASC',
+    );
+    return rows.map(MaterialBillImportItem.fromMap).toList();
+  }
+
+  Future<bool> isLatestMaterialBillImportBatch(int batchId) async {
+    final db = await database;
+    final rows = await db.query(
+      _materialBillImportBatchTableName,
+      columns: ['id'],
+      orderBy: 'created_at DESC, id DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return false;
+    }
+    return rows.first['id'] == batchId;
+  }
+
+  Future<int> deleteLatestMaterialBillImportBatch(int batchId) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      final latestRows = await txn.query(
+        _materialBillImportBatchTableName,
+        columns: ['id'],
+        orderBy: 'created_at DESC, id DESC',
+        limit: 1,
+      );
+      if (latestRows.isEmpty || latestRows.first['id'] != batchId) {
+        return 0;
+      }
+      final rows = await txn.query(
+        _materialBillImportItemTableName,
+        columns: ['record_id'],
+        where: 'batch_id = ?',
+        whereArgs: [batchId],
+      );
+      final recordIds = rows
+          .map((row) => (row['record_id'] as num?)?.toInt())
+          .whereType<int>()
+          .toList();
+      if (recordIds.isNotEmpty) {
+        final placeholders = List.filled(recordIds.length, '?').join(',');
+        await txn.delete(
+          _inventoryTableName,
+          where: 'record_id IN ($placeholders)',
+          whereArgs: recordIds,
+        );
+        await txn.delete(
+          _tableName,
+          where: 'id IN ($placeholders)',
+          whereArgs: recordIds,
+        );
+      }
+      await txn.delete(
+        _materialBillImportItemTableName,
+        where: 'batch_id = ?',
+        whereArgs: [batchId],
+      );
+      return txn.delete(
+        _materialBillImportBatchTableName,
+        where: 'id = ?',
+        whereArgs: [batchId],
+      );
+    });
+  }
+
+  String _formatCompactNumber(double value) {
+    final rounded = value.toStringAsFixed(2);
+    if (rounded.endsWith('.00')) {
+      return rounded.substring(0, rounded.length - 3);
+    }
+    if (rounded.endsWith('0')) {
+      return rounded.substring(0, rounded.length - 1);
+    }
+    return rounded;
   }
 
   Future<int> createReimbursement(
@@ -1582,6 +1907,8 @@ class RecordDatabase {
     final db = await database;
     await db.delete(_inventoryTableName);
     await db.delete(_tableName);
+    await db.delete(_materialBillImportItemTableName);
+    await db.delete(_materialBillImportBatchTableName);
   }
 
   Future<String> backup() async {

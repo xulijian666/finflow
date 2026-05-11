@@ -297,6 +297,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     };
     // 课程成本数据：按(年级,课程)分组记录材料使用情况
     final courseCostMap = <String, _CourseCostItem>{};
+    final sourceRowQuantities = <int, double>{};
 
     for (var i = 1; i < rows.length; i++) {
       final row = rows[i];
@@ -340,6 +341,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       if (finalQty <= 0) {
         continue;
       }
+      sourceRowQuantities[i] = finalQty;
       final key = _MaterialKey(
         materialName: materialName,
         materialType: materialType,
@@ -384,6 +386,12 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
               materialName: materialName,
               unitPrice: 0,
               quantity: finalQty,
+              minimumQuantity: _minimumCostQuantity(
+                role: role,
+                outboundCategory: outboundCategory,
+                actualQuantity: finalQty,
+                eachGroupQty: eachGroupQty,
+              ),
               role: role,
             ),
           );
@@ -392,13 +400,19 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
             (d) => d.materialName == materialName && d.role == role,
           );
           existingDetail.quantity += finalQty;
+          existingDetail.minimumQuantity += _minimumCostQuantity(
+            role: role,
+            outboundCategory: outboundCategory,
+            actualQuantity: finalQty,
+            eachGroupQty: eachGroupQty,
+          );
         }
       }
     }
 
     // 获取材料单价并更新课程成本数据
     _appendDebug('开始获取材料单价');
-    await _fetchAndApplyUnitPrices(courseCostMap);
+    final unitPriceByMaterial = await _fetchAndApplyUnitPrices(courseCostMap);
 
     // 暂不排序，在写入成本计算Sheet时按材料总价排序
     final courseCosts = courseCostMap.values.toList();
@@ -409,25 +423,32 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
               row.map((cell) => _cellExportValue(cell)).toList(growable: true),
         )
         .toList(growable: true);
+    final materialPriceRows = _buildMaterialPriceRows(
+      sourceRows: sourceRows,
+      columnIndex: index,
+      sourceRowQuantities: sourceRowQuantities,
+      unitPriceByMaterial: unitPriceByMaterial,
+    );
     _appendDebug(
       '聚合完成: 原始行=${sourceRows.length}，课程成本数据=${courseCosts.length}条',
     );
     return _AggregateResult(
       aggregate: aggregate,
       sourceRows: sourceRows,
+      materialPriceRows: materialPriceRows,
       grades: grades,
       courseCosts: courseCosts,
     );
   }
 
   // 从数据库获取材料单价并更新课程成本数据
-  Future<void> _fetchAndApplyUnitPrices(
+  Future<Map<String, double>> _fetchAndApplyUnitPrices(
     Map<String, _CourseCostItem> courseCostMap,
   ) async {
+    final unitPriceCache = <String, double>{};
     try {
       final inventorySummary = await RecordDatabase.instance
           .fetchInventorySummary();
-      final unitPriceCache = <String, double>{};
       for (final item in inventorySummary) {
         final unitPrice = item.purchasedQuantity > 0
             ? item.totalAmount / item.purchasedQuantity
@@ -439,12 +460,15 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       for (final costItem in courseCostMap.values) {
         double totalTeacherCost = 0;
         double totalStudentCost = 0;
+        costItem.teacherMinimumCost = 0;
         for (final detail in costItem.materialDetails) {
           final unitPrice = unitPriceCache[detail.materialName] ?? 0.0;
           detail.unitPrice = unitPrice;
           final materialCost = detail.quantity * unitPrice;
+          final minimumCost = detail.minimumQuantity * unitPrice;
           if (detail.role == '老师') {
             totalTeacherCost += materialCost;
+            costItem.teacherMinimumCost += minimumCost;
           } else {
             totalStudentCost += materialCost;
           }
@@ -459,6 +483,68 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     } catch (e) {
       _appendDebug('获取材料单价失败: $e，将使用0单价');
     }
+    return unitPriceCache;
+  }
+
+  double _minimumCostQuantity({
+    required String role,
+    required String outboundCategory,
+    required double actualQuantity,
+    required double eachGroupQty,
+  }) {
+    if (role != '老师') {
+      return actualQuantity;
+    }
+    if (outboundCategory == '按组') {
+      return eachGroupQty;
+    }
+    return actualQuantity;
+  }
+
+  List<List<dynamic>> _buildMaterialPriceRows({
+    required List<List<dynamic>> sourceRows,
+    required Map<String, int> columnIndex,
+    required Map<int, double> sourceRowQuantities,
+    required Map<String, double> unitPriceByMaterial,
+  }) {
+    final materialNameIndex = columnIndex['材料名称'];
+    final outboundQtyIndex = columnIndex['出库数量'];
+    if (materialNameIndex == null || outboundQtyIndex == null) {
+      return sourceRows.map((row) => List<dynamic>.from(row)).toList();
+    }
+
+    final result = <List<dynamic>>[];
+    for (var i = 0; i < sourceRows.length; i++) {
+      final row = List<dynamic>.from(sourceRows[i], growable: true);
+      if (i == 0) {
+        _insertSheetCell(row, outboundQtyIndex, '单价');
+        _insertSheetCell(row, outboundQtyIndex + 2, '总价');
+      } else {
+        final materialName = _valueText(
+          _rowValueAt(sourceRows[i], materialNameIndex),
+        );
+        final unitPrice = unitPriceByMaterial[materialName] ?? 0.0;
+        final totalPrice = (sourceRowQuantities[i] ?? 0.0) * unitPrice;
+        _insertSheetCell(row, outboundQtyIndex, _formatFixed2(unitPrice));
+        _insertSheetCell(row, outboundQtyIndex + 2, _formatFixed2(totalPrice));
+      }
+      result.add(row);
+    }
+    return result;
+  }
+
+  Object? _rowValueAt(List<dynamic> row, int index) {
+    if (index < 0 || index >= row.length) {
+      return null;
+    }
+    return row[index];
+  }
+
+  void _insertSheetCell(List<dynamic> row, int index, dynamic value) {
+    while (row.length < index) {
+      row.add('');
+    }
+    row.insert(index, value);
   }
 
   Future<String> _writeResult({
@@ -551,9 +637,11 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       }
     }
     final summarySheet = workbook['出库汇总'];
-    final inventorySummary = await RecordDatabase.instance.fetchInventorySummary();
+    final inventorySummary = await RecordDatabase.instance
+        .fetchInventorySummary();
     final inventoryQuantityMap = <String, double>{
-      for (final item in inventorySummary) item.materialName: item.remainingQuantity,
+      for (final item in inventorySummary)
+        item.materialName: item.remainingQuantity,
     };
     _appendSheetRow(
       sheet: summarySheet,
@@ -634,8 +722,8 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         '材料总价',
         '学生人数',
         '老师人数',
-        '每生成本',
-        '师均成本',
+        '每生成本\n（材料总价/学生人数）',
+        '老师材料最小值\n（1组人）',
         '最高材料占比',
         '最大成本项',
         '健康度评分',
@@ -656,7 +744,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       final studentCount = peopleCounts[costItem.grade]!['学生'] ?? 0;
       final teacherCount = peopleCounts[costItem.grade]!['老师'] ?? 0;
       final costPerStudent = studentCount > 0 ? totalCost / studentCount : 0.0;
-      final costPerTeacher = teacherCount > 0 ? totalCost / teacherCount : 0.0;
       // 计算成本结构分析指标
       final materialCosts = <String, double>{};
       for (final detail in costItem.materialDetails) {
@@ -688,16 +775,18 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       String healthScore = '';
       String healthComment = '';
       // 判断是否有任何材料单价为0（未采购）
-      final hasZeroPrice = costItem.materialDetails.any((d) => d.unitPrice == 0);
+      final hasZeroPrice = costItem.materialDetails.any(
+        (d) => d.unitPrice == 0,
+      );
       if (hasZeroPrice) {
         healthScore = '❓ 无法计算';
         healthComment = '存在单价为0的材料，可能未采购，成本数据不准确';
       } else if (highestRatio >= 0.7 || hhi >= 0.6) {
         healthScore = '❌ 差';
-        healthComment = '成本高度集中于${highestCostMaterial}，需重点优化';
+        healthComment = '成本高度集中于$highestCostMaterial，需重点优化';
       } else if (highestRatio >= 0.5 || hhi >= 0.4) {
         healthScore = '⚠️ 中';
-        healthComment = '成本集中度偏高，${highestCostMaterial}可优化';
+        healthComment = '成本集中度偏高，$highestCostMaterial可优化';
       } else if (highestRatio >= 0.3 || hhi >= 0.25) {
         healthScore = '✅ 良';
         healthComment = '成本结构合理，可小幅优化';
@@ -706,12 +795,15 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         healthComment = '成本分散均匀，结构健康';
       }
       // 生成材料明细备注
-      final materialNotes = costItem.materialDetails
-          .toList()
-          ..sort((a, b) => b.unitPrice.compareTo(a.unitPrice));
+      final materialNotes = costItem.materialDetails.toList()
+        ..sort((a, b) => b.unitPrice.compareTo(a.unitPrice));
       final materialNotesStr = materialNotes
-          .map((d) => '${d.materialName}:${_formatNumber(d.unitPrice)}')
-          .toSet()
+          .asMap()
+          .entries
+          .map(
+            (entry) =>
+                '${entry.key + 1}. ${entry.value.materialName}:${_formatFixed2(entry.value.unitPrice)}',
+          )
           .join('，');
       _appendSheetRow(
         sheet: costSheet,
@@ -721,19 +813,29 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           i + 1,
           costItem.grade,
           costItem.courseName,
-          _formatNumber(costItem.teacherCost),
-          _formatNumber(costItem.studentCost),
-          _formatNumber(totalCost),
+          _formatFixed2(costItem.teacherCost),
+          _formatFixed2(costItem.studentCost),
+          _formatFixed2(totalCost),
           studentCount,
           teacherCount,
-          _formatNumber(costPerStudent),
-          _formatNumber(costPerTeacher),
-          '${_formatNumber(highestRatio * 100)}%',
+          _formatFixed2(costPerStudent),
+          _formatFixed2(costItem.teacherMinimumCost),
+          '${_formatFixed2(highestRatio * 100)}%',
           highestCostMaterial,
           healthScore,
           healthComment,
           materialNotesStr,
         ],
+      );
+    }
+
+    final materialPriceSheet = workbook['材料单价'];
+    for (var i = 0; i < aggregate.materialPriceRows.length; i++) {
+      _appendSheetRow(
+        sheet: materialPriceSheet,
+        row: aggregate.materialPriceRows[i],
+        stage: '材料单价',
+        rowIndex: i + 1,
       );
     }
 
@@ -759,6 +861,10 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       return value.toInt();
     }
     return double.parse(value.toStringAsFixed(2));
+  }
+
+  String _formatFixed2(double value) {
+    return value.toStringAsFixed(2);
   }
 
   excel.Data? _cellAt(List<excel.Data?> row, int index) {
@@ -877,6 +983,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       bold: true,
       fontColorHex: '#FFFFFFFF',
       backgroundColorHex: '#FF4F81BD',
+      textWrapping: excel.TextWrapping.WrapText,
       leftBorder: border,
       rightBorder: border,
       topBorder: border,
@@ -920,6 +1027,8 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     final highlightColumns = <int>{};
     final healthScoreColumns = <int>{};
     final remainingInventoryColumns = <int>{};
+    final zeroUnitPriceColumns = <int>{};
+    final wrapTextColumns = <int>{};
     for (var col = 0; col < sheet.maxCols; col++) {
       final headerCell = sheet.cell(
         excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0),
@@ -927,6 +1036,15 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       final headerText = _valueText(headerCell.value);
       if (headerText.contains('出库数量')) {
         highlightColumns.add(col);
+      }
+      if (sheetName == '材料单价' && (headerText == '单价' || headerText == '总价')) {
+        highlightColumns.add(col);
+      }
+      if (sheetName == '材料单价' && headerText == '单价') {
+        zeroUnitPriceColumns.add(col);
+      }
+      if (sheetName == '成本计算' && headerText.startsWith('备注')) {
+        wrapTextColumns.add(col);
       }
       if (headerText.contains('健康度评分')) {
         healthScoreColumns.add(col);
@@ -985,6 +1103,20 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       topBorder: normalStyle.topBorder,
       bottomBorder: normalStyle.bottomBorder,
     );
+    final zeroUnitPriceStyle = excel.CellStyle(
+      backgroundColorHex: '#FFF4CCCC',
+      leftBorder: normalStyle.leftBorder,
+      rightBorder: normalStyle.rightBorder,
+      topBorder: normalStyle.topBorder,
+      bottomBorder: normalStyle.bottomBorder,
+    );
+    final wrapTextStyle = excel.CellStyle(
+      textWrapping: excel.TextWrapping.WrapText,
+      leftBorder: normalStyle.leftBorder,
+      rightBorder: normalStyle.rightBorder,
+      topBorder: normalStyle.topBorder,
+      bottomBorder: normalStyle.bottomBorder,
+    );
 
     for (var row = 0; row < sheet.maxRows; row++) {
       for (var col = 0; col < sheet.maxCols; col++) {
@@ -997,7 +1129,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         }
         // 成本计算Sheet的健康度评分列特殊处理
         if (healthScoreColumns.contains(col)) {
-          final cellText = _valueText(cell.value) ?? '';
+          final cellText = _valueText(cell.value);
           if (cellText.contains('差')) {
             cell.cellStyle = healthBadStyle;
           } else if (cellText.contains('无法计算')) {
@@ -1019,6 +1151,17 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
             cell.cellStyle = nonPositiveInventoryStyle;
             continue;
           }
+        }
+        if (zeroUnitPriceColumns.contains(col)) {
+          final numericValue = num.tryParse(_valueText(cell.value));
+          if (numericValue != null && numericValue == 0) {
+            cell.cellStyle = zeroUnitPriceStyle;
+            continue;
+          }
+        }
+        if (wrapTextColumns.contains(col)) {
+          cell.cellStyle = wrapTextStyle;
+          continue;
         }
         cell.cellStyle = highlightColumns.contains(col)
             ? highlightStyle
@@ -1125,61 +1268,62 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       if (updated == xml) continue;
 
       final updatedBytes = utf8.encode(updated);
-      final replaced =
-          ArchiveFile(file.name, updatedBytes.length, updatedBytes)
-            ..mode = file.mode
-            ..ownerId = file.ownerId
-            ..groupId = file.groupId
-            ..lastModTime = file.lastModTime
-            ..comment = file.comment
-            ..crc32 = file.crc32
-            ..compress = file.compress
-            ..isFile = file.isFile;
+      final replaced = ArchiveFile(file.name, updatedBytes.length, updatedBytes)
+        ..mode = file.mode
+        ..ownerId = file.ownerId
+        ..groupId = file.groupId
+        ..lastModTime = file.lastModTime
+        ..comment = file.comment
+        ..crc32 = file.crc32
+        ..compress = file.compress
+        ..isFile = file.isFile;
       archive[i] = replaced;
     }
     return ZipEncoder().encode(archive) ?? xlsxBytes;
   }
 
   String _enrichTextInSharedStrings(String xml) {
-    // 匹配材料备注格式："材料名:价格，材料名:价格，..."
+    // 匹配成本备注格式："1. 材料名:价格，2. 材料名:价格，..."
     final ssPattern = RegExp(
-      r'<si><t xml:space="preserve">(([^<]*[，][^<]*)+)</t></si>',
+      r'<si><t(?: xml:space="preserve")?>([^<]*\d+\.\s[^<]*:[^<]*)</t></si>',
     );
 
     return xml.replaceAllMapped(ssPattern, (match) {
       final text = match.group(1)!;
-      // 仅处理包含"数字:数字"模式的条目（材料备注）
-      if (!RegExp(r'\d+\.?\d*:\d+\.?\d*').hasMatch(text) &&
-          !RegExp(r'[一-鿿]+:\d+\.?\d*').hasMatch(text)) {
+      if (!RegExp(r'(^|[\n，])\d+\.\s').hasMatch(text)) {
         return match.group(0)!;
       }
 
-      final entries = text.split('，');
+      final entries = text
+          .split(RegExp(r'[\n，]'))
+          .map((entry) => entry.trim())
+          .where((entry) => entry.isNotEmpty)
+          .toList();
       final buffer = StringBuffer('<si>');
 
       for (var j = 0; j < entries.length; j++) {
         if (j > 0) {
-          buffer.write(
-              '<r><rPr><color rgb="FF999999"/></rPr><t xml:space="preserve">，</t></r>');
+          buffer.write('<r><t xml:space="preserve">\n</t></r>');
         }
 
         final entry = entries[j];
         final colonIndex = entry.lastIndexOf(':');
         if (colonIndex <= 0) {
-          buffer.write(
-              '<r><t xml:space="preserve">$entry</t></r>');
+          buffer.write('<r><t xml:space="preserve">$entry</t></r>');
           continue;
         }
 
         final name = entry.substring(0, colonIndex);
         final price = entry.substring(colonIndex);
+        final amount = double.tryParse(price.substring(1).trim()) ?? 0;
+        final priceColor = amount < 0 ? 'FFCC0000' : 'FF000000';
 
-        // 材料名称：蓝色加粗
         buffer.write(
-            '<r><rPr><b/><color rgb="FF2E75B6"/></rPr><t xml:space="preserve">$name</t></r>');
-        // 单价：深红色
+          '<r><rPr><b/><color rgb="FF2E75B6"/></rPr><t xml:space="preserve">$name</t></r>',
+        );
         buffer.write(
-            '<r><rPr><color rgb="FFCC0000"/></rPr><t xml:space="preserve">$price</t></r>');
+          '<r><rPr><color rgb="$priceColor"/></rPr><t xml:space="preserve">$price</t></r>',
+        );
       }
 
       buffer.write('</si>');
@@ -1257,7 +1401,9 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       final jsonList = _historyRecords.map((item) => item.toJson()).toList();
       final jsonStr = jsonEncode(jsonList);
       await prefs.setString(_historyPrefsKey, jsonStr);
-      debugPrint('保存历史记录成功: ${_historyRecords.length} 条, 数据长度=${jsonStr.length}');
+      debugPrint(
+        '保存历史记录成功: ${_historyRecords.length} 条, 数据长度=${jsonStr.length}',
+      );
     } catch (e) {
       debugPrint('保存历史记录失败: $e');
     }
@@ -1559,12 +1705,14 @@ class _AggregateResult {
   const _AggregateResult({
     required this.aggregate,
     required this.sourceRows,
+    required this.materialPriceRows,
     required this.grades,
     required this.courseCosts,
   });
 
   final Map<String, Map<_MaterialKey, _AggregateItem>> aggregate;
   final List<List<dynamic>> sourceRows;
+  final List<List<dynamic>> materialPriceRows;
   final List<String> grades;
   final List<_CourseCostItem> courseCosts; // 课程成本数据
 }
@@ -1630,12 +1778,14 @@ class _CourseMaterialDetail {
     required this.materialName,
     required this.unitPrice,
     required this.quantity,
+    required this.minimumQuantity,
     required this.role,
   });
 
   final String materialName;
   double unitPrice; // 材料单价
   double quantity; // 使用数量
+  double minimumQuantity; // 最小口径数量
   final String role; // 学生/老师
 }
 
@@ -1647,5 +1797,6 @@ class _CourseCostItem {
   final String courseName;
   double teacherCost = 0; // 老师材料总价
   double studentCost = 0; // 学生材料总价
+  double teacherMinimumCost = 0; // 老师材料最小值
   final List<_CourseMaterialDetail> materialDetails = []; // 材料明细列表
 }
