@@ -377,9 +377,20 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           costKey,
           () => _CourseCostItem(grade: grade, courseName: courseName),
         );
-        // 累加材料数量
+        final basisQuantity = outboundCategory == '按组'
+            ? eachGroupQty
+            : outboundQty;
+        final multiplierValue = outboundCategory == '按组'
+            ? groupCount
+            : (peopleCounts[grade]![role] ?? 0).toDouble();
+        // 课程详情Sheet需要保留不同计算口径，避免按人/按组混合后无法审计。
         if (!costItem.materialDetails.any(
-          (d) => d.materialName == materialName && d.role == role,
+          (d) =>
+              d.materialName == materialName &&
+              d.role == role &&
+              d.outboundCategory == outboundCategory &&
+              _isSameDouble(d.basisQuantity, basisQuantity) &&
+              _isSameDouble(d.multiplierValue, multiplierValue),
         )) {
           costItem.materialDetails.add(
             _CourseMaterialDetail(
@@ -393,11 +404,19 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
                 eachGroupQty: eachGroupQty,
               ),
               role: role,
+              outboundCategory: outboundCategory,
+              basisQuantity: basisQuantity,
+              multiplierValue: multiplierValue,
             ),
           );
         } else {
           final existingDetail = costItem.materialDetails.firstWhere(
-            (d) => d.materialName == materialName && d.role == role,
+            (d) =>
+                d.materialName == materialName &&
+                d.role == role &&
+                d.outboundCategory == outboundCategory &&
+                _isSameDouble(d.basisQuantity, basisQuantity) &&
+                _isSameDouble(d.multiplierValue, multiplierValue),
           );
           existingDetail.quantity += finalQty;
           existingDetail.minimumQuantity += _minimumCostQuantity(
@@ -520,8 +539,14 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       // 跳过业务字段全为空的数据行
       if (i > 0) {
         final src = sourceRows[i];
-        bool allEmpty(int idx) => idx >= src.length || _valueText(src[idx]).isEmpty;
-        if (allEmpty(2) && allEmpty(3) && allEmpty(4) && allEmpty(5) && allEmpty(6) && allEmpty(7)) {
+        bool allEmpty(int idx) =>
+            idx >= src.length || _valueText(src[idx]).isEmpty;
+        if (allEmpty(2) &&
+            allEmpty(3) &&
+            allEmpty(4) &&
+            allEmpty(5) &&
+            allEmpty(6) &&
+            allEmpty(7)) {
           continue;
         }
       }
@@ -573,26 +598,47 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           final studentCount = gradePeople != null
               ? (gradePeople['学生'] ?? 0)
               : 0;
-          final eachGroupStudentNum =
-              double.tryParse(eachGroupStudent) ?? 1;
+          final eachGroupStudentNum = double.tryParse(eachGroupStudent) ?? 1;
           final double gc = eachGroupStudentNum > 0
               ? math
-                  .max(1, (studentCount / eachGroupStudentNum).ceil())
-                  .toDouble()
+                    .max(1, (studentCount / eachGroupStudentNum).ceil())
+                    .toDouble()
               : 0.0;
           groupCountStr = _formatFixed2(gc);
         }
 
         _insertSheetCell(row, outboundQtyIndex, unitPrice);
-        _insertSheetCell(row, outboundQtyIndex + 2, isByGroup ? 0 : (gradePeople?['学生'] ?? 0));
-        _insertSheetCell(row, outboundQtyIndex + 3, isByGroup ? 0 : (gradePeople?['老师'] ?? 0));
-        _insertSheetCell(row, outboundQtyIndex + 4, isByGroup ? (double.tryParse(eachGroupQty) ?? 0) : 0);
-        _insertSheetCell(row, outboundQtyIndex + 5, isByGroup ? (double.tryParse(eachGroupStudent) ?? 0) : 0);
-        _insertSheetCell(row, outboundQtyIndex + 6, isByGroup ? (double.tryParse(groupCountStr) ?? 0) : 0);
+        _insertSheetCell(
+          row,
+          outboundQtyIndex + 2,
+          isByGroup ? 0 : (gradePeople?['学生'] ?? 0),
+        );
+        _insertSheetCell(
+          row,
+          outboundQtyIndex + 3,
+          isByGroup ? 0 : (gradePeople?['老师'] ?? 0),
+        );
+        _insertSheetCell(
+          row,
+          outboundQtyIndex + 4,
+          isByGroup ? (double.tryParse(eachGroupQty) ?? 0) : 0,
+        );
+        _insertSheetCell(
+          row,
+          outboundQtyIndex + 5,
+          isByGroup ? (double.tryParse(eachGroupStudent) ?? 0) : 0,
+        );
+        _insertSheetCell(
+          row,
+          outboundQtyIndex + 6,
+          isByGroup ? (double.tryParse(groupCountStr) ?? 0) : 0,
+        );
         _insertSheetCell(row, outboundQtyIndex + 7, finalQty);
         _insertSheetCell(row, outboundQtyIndex + 8, 0.0); // 占位，排序后更新公式
         // 说明列：材料总数计算方式
-        final outboundQtyVal = _valueText(_rowValueAt(sourceRows[i], outboundQtyIndex));
+        final outboundQtyVal = _valueText(
+          _rowValueAt(sourceRows[i], outboundQtyIndex),
+        );
         final rolePeople = gradePeople?[role] ?? 0;
         qtyDesc = isByGroup
             ? '按组每组出库数量×组数=$eachGroupQty×$groupCountStr=${_formatFixed2(finalQty)}'
@@ -653,6 +699,10 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     final shift = sigFigs - d;
     final factor = math.pow(10, shift);
     return (value * factor).round() / factor;
+  }
+
+  bool _isSameDouble(double a, double b) {
+    return (a - b).abs() < 0.000001;
   }
 
   int _courseSortKey(String name) {
@@ -849,9 +899,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         '老师材料最小值\n（1组人）',
         '最高材料占比',
         '最大成本项',
-        '健康度评分',
-        '健康度评语',
-        '备注（材料名称:单价）',
       ],
     );
     // 按材料总价从高到低排序
@@ -886,48 +933,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           }
         }
       }
-      // 集中度指数（HHI）：各材料占比的平方和，用于健康度评分分析
-      double hhi = 0.0;
-      if (totalCost > 0) {
-        for (final cost in materialCosts.values) {
-          final ratio = cost / totalCost;
-          hhi += ratio * ratio;
-        }
-      }
-      // 健康度评分（基于最高材料占比和集中度指数）
-      String healthScore = '';
-      String healthComment = '';
-      // 判断是否有任何材料单价为0（未采购）
-      final hasZeroPrice = costItem.materialDetails.any(
-        (d) => d.unitPrice == 0,
-      );
-      if (hasZeroPrice) {
-        healthScore = '❓ 无法计算';
-        healthComment = '存在单价为0的材料，可能未采购，成本数据不准确';
-      } else if (highestRatio >= 0.7 || hhi >= 0.6) {
-        healthScore = '❌ 差';
-        healthComment = '成本高度集中于$highestCostMaterial，需重点优化';
-      } else if (highestRatio >= 0.5 || hhi >= 0.4) {
-        healthScore = '⚠️ 中';
-        healthComment = '成本集中度偏高，$highestCostMaterial可优化';
-      } else if (highestRatio >= 0.3 || hhi >= 0.25) {
-        healthScore = '✅ 良';
-        healthComment = '成本结构合理，可小幅优化';
-      } else {
-        healthScore = '⭐ 优';
-        healthComment = '成本分散均匀，结构健康';
-      }
-      // 生成材料明细备注
-      final materialNotes = costItem.materialDetails.toList()
-        ..sort((a, b) => b.unitPrice.compareTo(a.unitPrice));
-      final materialNotesStr = materialNotes
-          .asMap()
-          .entries
-          .map(
-            (entry) =>
-                '${entry.key + 1}. ${entry.value.materialName}:${_formatFixed2(entry.value.unitPrice)}',
-          )
-          .join('，');
       _appendSheetRow(
         sheet: costSheet,
         stage: '成本计算-数据',
@@ -945,13 +950,11 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           _formatFixed2(costItem.teacherMinimumCost),
           '${_formatFixed2(highestRatio * 100)}%',
           highestCostMaterial,
-          healthScore,
-          healthComment,
-          materialNotesStr,
         ],
       );
     }
 
+    // 材料单价Sheet
     final materialPriceSheet = workbook['材料单价'];
     for (var i = 0; i < aggregate.materialPriceRows.length; i++) {
       _appendSheetRow(
@@ -962,19 +965,201 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       );
     }
 
+    // 课程详情Sheet：为每个课程创建材料成本明细
+    final courseDetailSheetNames = <String, String>{}; // courseKey -> sheetName
+    final usedSheetNames = <String>{};
+    for (var i = 0; i < sortedCosts.length; i++) {
+      final costItem = sortedCosts[i];
+      final courseKey = '${costItem.grade}_${costItem.courseName}';
+      // 生成唯一Sheet名
+      var rawName = courseKey;
+      rawName = rawName.replaceAll(RegExp(r'[\\/*?\[\]：:———–]'), '_');
+      if (rawName.length > 31) rawName = rawName.substring(0, 31);
+      var sheetName = rawName;
+      var suffix = 2;
+      while (usedSheetNames.contains(sheetName)) {
+        final maxBase = 31 - '_$suffix'.length;
+        sheetName =
+            '${rawName.substring(0, maxBase.clamp(0, rawName.length))}_$suffix';
+        suffix++;
+      }
+      usedSheetNames.add(sheetName);
+      courseDetailSheetNames[courseKey] = sheetName;
+
+      final detailSheet = workbook[sheetName];
+      final studentCount = peopleCounts[costItem.grade]!['学生'] ?? 0;
+      final teacherCount = peopleCounts[costItem.grade]!['老师'] ?? 0;
+      final totalCost = costItem.teacherCost + costItem.studentCost;
+      final costPerStudent = studentCount > 0 ? totalCost / studentCount : 0.0;
+      final sortedDetails = costItem.materialDetails.toList()
+        ..sort((a, b) {
+          final amountCompare = b.amount.compareTo(a.amount);
+          if (amountCompare != 0) {
+            return amountCompare;
+          }
+          const roleOrder = {'学生': 0, '老师': 1};
+          final roleCompare = (roleOrder[a.role] ?? 9).compareTo(
+            roleOrder[b.role] ?? 9,
+          );
+          if (roleCompare != 0) {
+            return roleCompare;
+          }
+          final nameCompare = a.materialName.compareTo(b.materialName);
+          if (nameCompare != 0) {
+            return nameCompare;
+          }
+          return a.outboundCategory.compareTo(b.outboundCategory);
+        });
+
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-返回',
+        row: ['← 返回成本计算'],
+      );
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-标题',
+        row: ['课程成本审核清单', '', '', '', '', '', '', ''],
+      );
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-基础信息',
+        row: [
+          '年级',
+          costItem.grade,
+          '',
+          '课程名称',
+          costItem.courseName,
+          '',
+          '',
+          '',
+        ],
+      );
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-基础信息',
+        row: ['学生人数', studentCount, '', '老师人数', teacherCount, '', '', ''],
+      );
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-汇总',
+        row: [
+          '学生材料总价',
+          _formatFixed2(costItem.studentCost),
+          '',
+          '老师材料总价',
+          _formatFixed2(costItem.teacherCost),
+          '',
+          '',
+          '',
+        ],
+      );
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-汇总',
+        row: [
+          '材料总价',
+          _formatFixed2(totalCost),
+          '',
+          '每生成本',
+          _formatFixed2(costPerStudent),
+          '',
+          '',
+          '',
+        ],
+      );
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-汇总',
+        row: [
+          '老师材料最小值（1组人）',
+          '',
+          '',
+          '',
+          _formatFixed2(costItem.teacherMinimumCost),
+          '',
+          '',
+          '',
+        ],
+      );
+      _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-口径标题',
+        row: ['成本计算口径', '', '', '', '', '', '', ''],
+      );
+      for (final note in _buildCourseCostAuditNotes(studentCount)) {
+        _appendSheetRow(
+          sheet: detailSheet,
+          stage: '$sheetName-口径说明',
+          row: [note, '', '', '', '', '', '', ''],
+        );
+      }
+      _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-表头',
+        row: ['序号', '材料名称', '角色', '计量方式', '单价', '数量', '金额', '计算说明'],
+      );
+
+      var seq = 0;
+      for (final detail in sortedDetails) {
+        seq++;
+        _appendSheetRow(
+          sheet: detailSheet,
+          stage: '$sheetName-数据',
+          rowIndex: seq,
+          row: [
+            seq,
+            detail.materialName,
+            detail.role,
+            detail.outboundCategory,
+            _formatFixed2(detail.unitPrice),
+            _formatFixed2(detail.quantity),
+            _formatFixed2(detail.amount),
+            _buildCourseCostDetailDescription(detail),
+          ],
+        );
+      }
+
+      _appendSheetRow(
+        sheet: detailSheet,
+        stage: '$sheetName-合计',
+        row: ['', '合计', '', '', '', '', _formatFixed2(totalCost), ''],
+      );
+
+      // 设置列宽
+      detailSheet.setColWidth(0, 10.0);
+      detailSheet.setColWidth(1, 28.0);
+      detailSheet.setColWidth(2, 10.0);
+      detailSheet.setColWidth(3, 10.0);
+      detailSheet.setColWidth(4, 12.0);
+      detailSheet.setColWidth(5, 12.0);
+      detailSheet.setColWidth(6, 12.0);
+      detailSheet.setColWidth(7, 44.0);
+    }
+
     _appendDebug('开始应用表格样式');
-    _beautifyWorkbook(workbook);
+    _beautifyWorkbook(
+      workbook,
+      skipSheets: courseDetailSheetNames.values.toSet(),
+    );
+    _applyHyperlinkStyles(workbook, courseDetailSheetNames, sortedCosts);
     _appendDebug('开始保存xlsx文件');
     final bytes = workbook.save();
     if (bytes == null) {
       throw Exception('导出失败');
     }
     final frozenBytes = _freezeHeaderRows(bytes);
-    final richBytes = _enrichTextCells(frozenBytes);
+    final hyperBytes = _injectHyperlinks(
+      frozenBytes,
+      courseDetailSheetNames,
+      sortedCosts,
+    );
     final directory = await _exportDirectory();
     final fileName = '课程出库导出_${_formatDateTime(DateTime.now())}.xlsx';
     final exportFile = File(p.join(directory.path, fileName));
-    await exportFile.writeAsBytes(richBytes, flush: true);
+    await exportFile.writeAsBytes(hyperBytes, flush: true);
     _appendDebug('xlsx写入完成: ${exportFile.path}');
     return exportFile.path;
   }
@@ -988,6 +1173,27 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
 
   String _formatFixed2(double value) {
     return value.toStringAsFixed(2);
+  }
+
+  List<String> _buildCourseCostAuditNotes(int studentCount) {
+    final costPerStudentDesc = studentCount > 0
+        ? '每生成本 = 材料总价 / 学生人数'
+        : '每生成本 = 学生人数为0时按0展示';
+    return [
+      '1. 学生材料总价 = 所有“学生”材料行金额之和',
+      '2. 老师材料总价 = 所有“老师”材料行金额之和',
+      '3. 材料总价 = 学生材料总价 + 老师材料总价；$costPerStudentDesc',
+      '4. 老师材料最小值（1组人）= 老师按人材料按实际人数计算，老师按组材料仅按1组计算',
+    ];
+  }
+
+  String _buildCourseCostDetailDescription(_CourseMaterialDetail detail) {
+    final quantityPart = detail.outboundCategory == '按组'
+        ? '按组：每组${_formatFixed2(detail.basisQuantity)} × ${_formatFixed2(detail.multiplierValue)}组 = ${_formatFixed2(detail.quantity)}'
+        : '按人：每人${_formatFixed2(detail.basisQuantity)} × ${_formatFixed2(detail.multiplierValue)}人 = ${_formatFixed2(detail.quantity)}';
+    final amountPart =
+        '金额：${_formatFixed2(detail.quantity)} × ${_formatFixed2(detail.unitPrice)} = ${_formatFixed2(detail.amount)}';
+    return '$quantityPart；$amountPart';
   }
 
   excel.Data? _cellAt(List<excel.Data?> row, int index) {
@@ -1091,7 +1297,266 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     }
   }
 
-  void _beautifyWorkbook(excel.Excel workbook) {
+  void _applyHyperlinkStyles(
+    excel.Excel workbook,
+    Map<String, String> courseDetailSheetNames,
+    List<_CourseCostItem> sortedCosts,
+  ) {
+    final border = excel.Border(
+      borderStyle: excel.BorderStyle.Thin,
+      borderColorHex: '#FF666666',
+    );
+    final costLinkStyle = excel.CellStyle(
+      fontColorHex: '#FF0563C1',
+      underline: excel.Underline.Single,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final detailLinkStyle = excel.CellStyle(
+      bold: true,
+      fontColorHex: '#FF0563C1',
+      underline: excel.Underline.Single,
+      backgroundColorHex: '#FFF4F8FC',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final normalStyle = excel.CellStyle(
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final titleStyle = excel.CellStyle(
+      bold: true,
+      fontColorHex: '#FFFFFFFF',
+      backgroundColorHex: '#FF1F4E78',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final infoLabelStyle = excel.CellStyle(
+      bold: true,
+      backgroundColorHex: '#FFEAF2F8',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final infoValueStyle = excel.CellStyle(
+      bold: true,
+      backgroundColorHex: '#FFFFFFFF',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final noteHeaderStyle = excel.CellStyle(
+      bold: true,
+      backgroundColorHex: '#FFD9EAF7',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final noteStyle = excel.CellStyle(
+      backgroundColorHex: '#FFF8FBFE',
+      textWrapping: excel.TextWrapping.WrapText,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final tableHeaderStyle = excel.CellStyle(
+      bold: true,
+      fontColorHex: '#FFFFFFFF',
+      backgroundColorHex: '#FF4F81BD',
+      textWrapping: excel.TextWrapping.WrapText,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final totalStyle = excel.CellStyle(
+      bold: true,
+      backgroundColorHex: '#FFFFF2CC',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+
+    final costSheet = workbook.tables['成本计算'];
+    if (costSheet != null) {
+      for (var i = 0; i < sortedCosts.length; i++) {
+        final cell = costSheet.cell(
+          excel.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: i + 1),
+        );
+        cell.cellStyle = costLinkStyle;
+      }
+    }
+
+    void setStyle(excel.Sheet s, int col, int row, excel.CellStyle style) {
+      s
+              .cell(
+                excel.CellIndex.indexByColumnRow(
+                  columnIndex: col,
+                  rowIndex: row,
+                ),
+              )
+              .cellStyle =
+          style;
+    }
+
+    void setRowStyle(
+      excel.Sheet s,
+      int row,
+      int colCount,
+      excel.CellStyle style,
+    ) {
+      for (var c = 0; c < colCount; c++) {
+        setStyle(s, c, row, style);
+      }
+    }
+
+    for (final entry in courseDetailSheetNames.entries) {
+      final sheetName = entry.value;
+      final ds = workbook.tables[sheetName];
+      if (ds == null) {
+        continue;
+      }
+      final costItem = sortedCosts.firstWhere(
+        (c) => '${c.grade}_${c.courseName}' == entry.key,
+      );
+      const noteCount = 4;
+      const titleRow = 1;
+      const infoStartRow = 2;
+      const summarySingleRow = 6;
+      const noteHeaderRow = 8;
+      const noteStartRow = 9;
+      const tableHeaderRow = 14;
+      const dataStartRow = 15;
+      final totalRow = dataStartRow + costItem.materialDetails.length;
+
+      ds.merge(
+        excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0),
+        excel.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: 0),
+        customValue: '← 返回成本计算',
+      );
+      ds.merge(
+        excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: titleRow),
+        excel.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: titleRow),
+        customValue: '课程成本审核清单',
+      );
+      for (final rowIndex in [
+        infoStartRow,
+        infoStartRow + 1,
+        infoStartRow + 2,
+        infoStartRow + 3,
+      ]) {
+        ds.merge(
+          excel.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIndex),
+          excel.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIndex),
+        );
+        ds.merge(
+          excel.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIndex),
+          excel.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIndex),
+        );
+      }
+      ds.merge(
+        excel.CellIndex.indexByColumnRow(
+          columnIndex: 0,
+          rowIndex: summarySingleRow,
+        ),
+        excel.CellIndex.indexByColumnRow(
+          columnIndex: 3,
+          rowIndex: summarySingleRow,
+        ),
+      );
+      ds.merge(
+        excel.CellIndex.indexByColumnRow(
+          columnIndex: 4,
+          rowIndex: summarySingleRow,
+        ),
+        excel.CellIndex.indexByColumnRow(
+          columnIndex: 7,
+          rowIndex: summarySingleRow,
+        ),
+      );
+      ds.merge(
+        excel.CellIndex.indexByColumnRow(
+          columnIndex: 0,
+          rowIndex: noteHeaderRow,
+        ),
+        excel.CellIndex.indexByColumnRow(
+          columnIndex: 7,
+          rowIndex: noteHeaderRow,
+        ),
+        customValue: '成本计算口径',
+      );
+      for (
+        var rowIndex = noteStartRow;
+        rowIndex < noteStartRow + noteCount;
+        rowIndex++
+      ) {
+        ds.merge(
+          excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIndex),
+          excel.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIndex),
+        );
+      }
+      ds.merge(
+        excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: totalRow),
+        excel.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: totalRow),
+      );
+
+      setRowStyle(ds, 0, 8, normalStyle);
+      setStyle(ds, 0, 0, detailLinkStyle);
+      setStyle(ds, 0, titleRow, titleStyle);
+      for (final rowIndex in [
+        infoStartRow,
+        infoStartRow + 1,
+        infoStartRow + 2,
+        infoStartRow + 3,
+      ]) {
+        setStyle(ds, 0, rowIndex, infoLabelStyle);
+        setStyle(ds, 1, rowIndex, infoValueStyle);
+        setStyle(ds, 3, rowIndex, infoLabelStyle);
+        setStyle(ds, 4, rowIndex, infoValueStyle);
+      }
+      setStyle(ds, 0, summarySingleRow, infoLabelStyle);
+      setStyle(ds, 4, summarySingleRow, infoValueStyle);
+      setRowStyle(ds, 7, 8, normalStyle);
+      setStyle(ds, 0, noteHeaderRow, noteHeaderStyle);
+      for (
+        var rowIndex = noteStartRow;
+        rowIndex < noteStartRow + noteCount;
+        rowIndex++
+      ) {
+        setStyle(ds, 0, rowIndex, noteStyle);
+      }
+      setRowStyle(ds, 13, 8, normalStyle);
+      setRowStyle(ds, tableHeaderRow, 8, tableHeaderStyle);
+      for (var rowIndex = dataStartRow; rowIndex < totalRow; rowIndex++) {
+        setRowStyle(ds, rowIndex, 8, normalStyle);
+      }
+      setRowStyle(ds, totalRow, 8, totalStyle);
+
+      ds.setColWidth(0, 12.0);
+      ds.setColWidth(1, 28.0);
+      ds.setColWidth(2, 10.0);
+      ds.setColWidth(3, 12.0);
+      ds.setColWidth(4, 14.0);
+      ds.setColWidth(5, 12.0);
+      ds.setColWidth(6, 14.0);
+      ds.setColWidth(7, 52.0);
+    }
+  }
+
+  void _beautifyWorkbook(excel.Excel workbook, {Set<String>? skipSheets}) {
     final border = excel.Border(
       borderStyle: excel.BorderStyle.Thin,
       borderColorHex: '#FF666666',
@@ -1122,6 +1587,10 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     for (final entry in workbook.tables.entries) {
       final sheetName = entry.key;
       final sheet = entry.value;
+      if (skipSheets != null && skipSheets.contains(sheetName)) {
+        _autoFitSheetColumns(sheet);
+        continue;
+      }
       _applySheetStyles(
         sheet: sheet,
         normalStyle: normalStyle,
@@ -1143,80 +1612,31 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     if (sheet.maxRows <= 0 || sheet.maxCols <= 0) {
       return;
     }
-    final border = excel.Border(
-      borderStyle: excel.BorderStyle.Thin,
-      borderColorHex: '#FF666666',
-    );
     final highlightColumns = <int>{};
-    final healthScoreColumns = <int>{};
     final remainingInventoryColumns = <int>{};
     final zeroUnitPriceColumns = <int>{};
-    final wrapTextColumns = <int>{};
     for (var col = 0; col < sheet.maxCols; col++) {
       final headerCell = sheet.cell(
         excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0),
       );
       final headerText = _valueText(headerCell.value);
-      if (sheetName == '材料单价' && (headerText == '材料单价' || headerText == '材料总数' || headerText == '总价')) {
+      if (sheetName == '材料单价' &&
+          (headerText == '材料单价' ||
+              headerText == '材料总数' ||
+              headerText == '总价')) {
         highlightColumns.add(col);
       }
-      if (sheetName != '材料单价' && (headerText.contains('出库数量') || headerText == '材料总数')) {
+      if (sheetName != '材料单价' &&
+          (headerText.contains('出库数量') || headerText == '材料总数')) {
         highlightColumns.add(col);
       }
       if (sheetName == '材料单价' && headerText == '材料单价') {
         zeroUnitPriceColumns.add(col);
       }
-      if (sheetName == '成本计算' && headerText.startsWith('备注')) {
-        wrapTextColumns.add(col);
-      }
-      if (headerText.contains('健康度评分')) {
-        healthScoreColumns.add(col);
-      }
       if (headerText == '出库后库存数量') {
         remainingInventoryColumns.add(col);
       }
     }
-    // 健康度颜色样式
-    final healthUnknownStyle = excel.CellStyle(
-      fontColorHex: '#FF757575',
-      bold: true,
-      leftBorder: border,
-      rightBorder: border,
-      topBorder: border,
-      bottomBorder: border,
-    );
-    final healthBadStyle = excel.CellStyle(
-      fontColorHex: '#FF8B0000',
-      bold: true,
-      leftBorder: border,
-      rightBorder: border,
-      topBorder: border,
-      bottomBorder: border,
-    );
-    final healthMidStyle = excel.CellStyle(
-      fontColorHex: '#FF996600',
-      bold: true,
-      leftBorder: border,
-      rightBorder: border,
-      topBorder: border,
-      bottomBorder: border,
-    );
-    final healthGoodStyle = excel.CellStyle(
-      fontColorHex: '#FF2E7D32',
-      bold: true,
-      leftBorder: border,
-      rightBorder: border,
-      topBorder: border,
-      bottomBorder: border,
-    );
-    final healthExcellentStyle = excel.CellStyle(
-      fontColorHex: '#FF1B5E20',
-      bold: true,
-      leftBorder: border,
-      rightBorder: border,
-      topBorder: border,
-      bottomBorder: border,
-    );
     final nonPositiveInventoryStyle = excel.CellStyle(
       fontColorHex: '#FF8B0000',
       backgroundColorHex: '#FFFDE9D9',
@@ -1233,13 +1653,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       topBorder: normalStyle.topBorder,
       bottomBorder: normalStyle.bottomBorder,
     );
-    final wrapTextStyle = excel.CellStyle(
-      textWrapping: excel.TextWrapping.WrapText,
-      leftBorder: normalStyle.leftBorder,
-      rightBorder: normalStyle.rightBorder,
-      topBorder: normalStyle.topBorder,
-      bottomBorder: normalStyle.bottomBorder,
-    );
 
     for (var row = 0; row < sheet.maxRows; row++) {
       for (var col = 0; col < sheet.maxCols; col++) {
@@ -1248,24 +1661,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         );
         if (row == 0) {
           cell.cellStyle = headerStyle;
-          continue;
-        }
-        // 成本计算Sheet的健康度评分列特殊处理
-        if (healthScoreColumns.contains(col)) {
-          final cellText = _valueText(cell.value);
-          if (cellText.contains('差')) {
-            cell.cellStyle = healthBadStyle;
-          } else if (cellText.contains('无法计算')) {
-            cell.cellStyle = healthUnknownStyle;
-          } else if (cellText.contains('中')) {
-            cell.cellStyle = healthMidStyle;
-          } else if (cellText.contains('良')) {
-            cell.cellStyle = healthGoodStyle;
-          } else if (cellText.contains('优')) {
-            cell.cellStyle = healthExcellentStyle;
-          } else {
-            cell.cellStyle = normalStyle;
-          }
           continue;
         }
         if (remainingInventoryColumns.contains(col)) {
@@ -1281,10 +1676,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
             cell.cellStyle = zeroUnitPriceStyle;
             continue;
           }
-        }
-        if (wrapTextColumns.contains(col)) {
-          cell.cellStyle = wrapTextStyle;
-          continue;
         }
         cell.cellStyle = highlightColumns.contains(col)
             ? highlightStyle
@@ -1311,6 +1702,160 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       final targetWidth = (maxWidth + 2).toDouble().clamp(10, 60).toDouble();
       sheet.setColWidth(col, targetWidth);
     }
+  }
+
+  List<int> _injectHyperlinks(
+    List<int> xlsxBytes,
+    Map<String, String> courseDetailSheetNames,
+    List<_CourseCostItem> sortedCosts,
+  ) {
+    try {
+      final archive = ZipDecoder().decodeBytes(xlsxBytes);
+      // 1. 解析 workbook.xml 获取 sheetName → rId
+      final sheetRIds = <String, String>{};
+      final sheetFileMap =
+          <String, String>{}; // sheetName → xl/worksheets/sheetN.xml
+      for (final file in archive.files) {
+        if (!file.isFile) continue;
+        if (file.name == 'xl/workbook.xml') {
+          final xml = utf8.decode(file.content as List<int>);
+          final sheetPattern = RegExp(
+            r'<sheet\s[^>]*?name="([^"]+)"[^>]*?r:id="([^"]+)"',
+          );
+          for (final m in sheetPattern.allMatches(xml)) {
+            sheetRIds[m.group(1)!] = m.group(2)!;
+          }
+        }
+        if (file.name == 'xl/_rels/workbook.xml.rels') {
+          final xml = utf8.decode(file.content as List<int>);
+          final relPattern = RegExp(
+            r'<Relationship\s[^>]*?Id="([^"]+)"[^>]*?Target="([^"]+)"',
+          );
+          for (final m in relPattern.allMatches(xml)) {
+            final rId = m.group(1)!;
+            final target = m.group(2)!;
+            for (final entry in sheetRIds.entries) {
+              if (entry.value == rId) {
+                sheetFileMap[entry.key] = 'xl/$target';
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      _appendDebug('超链接: sheetRIds=$sheetRIds');
+      _appendDebug('超链接: sheetFileMap=$sheetFileMap');
+
+      // 2. 找到成本计算sheet文件
+      final costSheetFile = sheetFileMap['成本计算'];
+      if (costSheetFile == null) {
+        _appendDebug('超链接: 未找到成本计算sheet，跳过');
+        return xlsxBytes;
+      }
+
+      // 3. 准备超链接数据
+      final costHyperlinks = <Map<String, String>>[];
+      for (var i = 0; i < sortedCosts.length; i++) {
+        final costItem = sortedCosts[i];
+        final courseKey = '${costItem.grade}_${costItem.courseName}';
+        final detailSheetName = courseDetailSheetNames[courseKey];
+        if (detailSheetName == null) continue;
+        costHyperlinks.add({
+          'ref': 'C${i + 2}',
+          'location': "'$detailSheetName'!A1",
+        });
+      }
+
+      final detailHyperlinks = <String, List<Map<String, String>>>{};
+      for (final sheetName in courseDetailSheetNames.values) {
+        detailHyperlinks[sheetName] = [
+          {'ref': 'A1', 'location': "'成本计算'!A1"},
+        ];
+      }
+
+      _appendDebug(
+        '超链接: costHyperlinks=${costHyperlinks.length}条, detailSheets=${detailHyperlinks.length}个',
+      );
+
+      // 4. 构建新archive，注入内部超链接（仅用location属性，不需要rels）
+      final newArchive = Archive();
+
+      for (final file in archive.files) {
+        if (!file.isFile) {
+          newArchive.addFile(file);
+          continue;
+        }
+
+        var content = file.content as List<int>;
+        final name = file.name;
+        var modified = false;
+
+        // 成本计算sheet注入超链接
+        if (name == costSheetFile) {
+          final xml = utf8.decode(content);
+          final updated = _injectHyperlinksIntoSheet(xml, costHyperlinks);
+          content = utf8.encode(updated);
+          modified = true;
+          _appendDebug('超链接: 注入成本计算sheet $name');
+        }
+
+        // 详情sheet注入超链接
+        for (final entry in detailHyperlinks.entries) {
+          final detailFile = sheetFileMap[entry.key];
+          if (detailFile != null && name == detailFile) {
+            final xml = utf8.decode(content);
+            final updated = _injectHyperlinksIntoSheet(xml, entry.value);
+            content = utf8.encode(updated);
+            modified = true;
+            _appendDebug('超链接: 注入详情sheet $name');
+          }
+        }
+
+        if (modified) {
+          final newFile = ArchiveFile(name, content.length, content)
+            ..compress = true;
+          newArchive.addFile(newFile);
+        } else {
+          newArchive.addFile(file);
+        }
+      }
+
+      final result = ZipEncoder().encode(newArchive);
+      if (result == null) {
+        _appendDebug('超链接: ZipEncoder返回null');
+        return xlsxBytes;
+      }
+      _appendDebug('超链接: 编码完成, ${result.length}字节');
+      return result;
+    } catch (e) {
+      _appendDebug('超链接注入失败: $e');
+      return xlsxBytes;
+    }
+  }
+
+  String _injectHyperlinksIntoSheet(
+    String xml,
+    List<Map<String, String>> hyperlinks,
+  ) {
+    if (hyperlinks.isEmpty) return xml;
+
+    final buffer = StringBuffer('<hyperlinks>');
+    for (final h in hyperlinks) {
+      final ref = h['ref']!;
+      final location = h['location']!;
+      buffer.write('<hyperlink ref="$ref" location="$location"/>');
+    }
+    buffer.write('</hyperlinks>');
+    final hlXml = buffer.toString();
+
+    final idx = xml.indexOf('<pageMargins');
+    if (idx < 0) {
+      final endIdx = xml.lastIndexOf('</worksheet>');
+      if (endIdx < 0) return xml;
+      return '${xml.substring(0, endIdx)}$hlXml${xml.substring(endIdx)}';
+    }
+    return '${xml.substring(0, idx)}$hlXml${xml.substring(idx)}';
   }
 
   int _textDisplayWidth(String text) {
@@ -1377,81 +1922,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     }
     final index = openMatch.end;
     return '${xml.substring(0, index)}$pane${xml.substring(index)}';
-  }
-
-  List<int> _enrichTextCells(List<int> xlsxBytes) {
-    final archive = ZipDecoder().decodeBytes(xlsxBytes);
-    for (var i = 0; i < archive.length; i++) {
-      final file = archive[i];
-      if (!file.isFile) continue;
-      if (file.name != 'xl/sharedStrings.xml') continue;
-
-      final xml = utf8.decode(file.content);
-      final updated = _enrichTextInSharedStrings(xml);
-      if (updated == xml) continue;
-
-      final updatedBytes = utf8.encode(updated);
-      final replaced = ArchiveFile(file.name, updatedBytes.length, updatedBytes)
-        ..mode = file.mode
-        ..ownerId = file.ownerId
-        ..groupId = file.groupId
-        ..lastModTime = file.lastModTime
-        ..comment = file.comment
-        ..crc32 = file.crc32
-        ..compress = file.compress
-        ..isFile = file.isFile;
-      archive[i] = replaced;
-    }
-    return ZipEncoder().encode(archive) ?? xlsxBytes;
-  }
-
-  String _enrichTextInSharedStrings(String xml) {
-    // 匹配成本备注格式："1. 材料名:价格，2. 材料名:价格，..."
-    final ssPattern = RegExp(
-      r'<si><t(?: xml:space="preserve")?>([^<]*\d+\.\s[^<]*:[^<]*)</t></si>',
-    );
-
-    return xml.replaceAllMapped(ssPattern, (match) {
-      final text = match.group(1)!;
-      if (!RegExp(r'(^|[\n，])\d+\.\s').hasMatch(text)) {
-        return match.group(0)!;
-      }
-
-      final entries = text
-          .split(RegExp(r'[\n，]'))
-          .map((entry) => entry.trim())
-          .where((entry) => entry.isNotEmpty)
-          .toList();
-      final buffer = StringBuffer('<si>');
-
-      for (var j = 0; j < entries.length; j++) {
-        if (j > 0) {
-          buffer.write('<r><t xml:space="preserve">\n</t></r>');
-        }
-
-        final entry = entries[j];
-        final colonIndex = entry.lastIndexOf(':');
-        if (colonIndex <= 0) {
-          buffer.write('<r><t xml:space="preserve">$entry</t></r>');
-          continue;
-        }
-
-        final name = entry.substring(0, colonIndex);
-        final price = entry.substring(colonIndex);
-        final amount = double.tryParse(price.substring(1).trim()) ?? 0;
-        final priceColor = amount < 0 ? 'FFCC0000' : 'FF000000';
-
-        buffer.write(
-          '<r><rPr><b/><color rgb="FF2E75B6"/></rPr><t xml:space="preserve">$name</t></r>',
-        );
-        buffer.write(
-          '<r><rPr><color rgb="$priceColor"/></rPr><t xml:space="preserve">$price</t></r>',
-        );
-      }
-
-      buffer.write('</si>');
-      return buffer.toString();
-    });
   }
 
   void _appendDebug(String message) {
@@ -1903,6 +2373,9 @@ class _CourseMaterialDetail {
     required this.quantity,
     required this.minimumQuantity,
     required this.role,
+    required this.outboundCategory,
+    required this.basisQuantity,
+    required this.multiplierValue,
   });
 
   final String materialName;
@@ -1910,6 +2383,11 @@ class _CourseMaterialDetail {
   double quantity; // 使用数量
   double minimumQuantity; // 最小口径数量
   final String role; // 学生/老师
+  final String outboundCategory; // 按人/按组
+  final double basisQuantity; // 按人时为每人数量，按组时为每组数量
+  final double multiplierValue; // 按人时为人数，按组时为组数
+
+  double get amount => quantity * unitPrice;
 }
 
 // 课程成本汇总项：记录每个年级-课程组合的成本信息

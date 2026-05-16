@@ -9,7 +9,9 @@
       "Bash(git commit *)",
       "Bash(flutter analyze *)",
       "Bash(flutter build *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(export PATH=\"/c/Program Files/Rizin/bin:$PATH\")",
+      "Bash(rizin -q -c ' *)"
     ]
   }
 }
