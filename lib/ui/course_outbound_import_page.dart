@@ -428,6 +428,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       columnIndex: index,
       sourceRowQuantities: sourceRowQuantities,
       unitPriceByMaterial: unitPriceByMaterial,
+      peopleCounts: peopleCounts,
     );
     _appendDebug(
       '聚合完成: 原始行=${sourceRows.length}，课程成本数据=${courseCosts.length}条',
@@ -506,6 +507,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     required Map<String, int> columnIndex,
     required Map<int, double> sourceRowQuantities,
     required Map<String, double> unitPriceByMaterial,
+    required Map<String, Map<String, int>> peopleCounts,
   }) {
     final materialNameIndex = columnIndex['材料名称'];
     final outboundQtyIndex = columnIndex['出库数量'];
@@ -515,22 +517,127 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
 
     final result = <List<dynamic>>[];
     for (var i = 0; i < sourceRows.length; i++) {
+      // 跳过业务字段全为空的数据行
+      if (i > 0) {
+        final src = sourceRows[i];
+        bool allEmpty(int idx) => idx >= src.length || _valueText(src[idx]).isEmpty;
+        if (allEmpty(2) && allEmpty(3) && allEmpty(4) && allEmpty(5) && allEmpty(6) && allEmpty(7)) {
+          continue;
+        }
+      }
       final row = List<dynamic>.from(sourceRows[i], growable: true);
+      String? qtyDesc;
       if (i == 0) {
-        _insertSheetCell(row, outboundQtyIndex, '单价');
-        _insertSheetCell(row, outboundQtyIndex + 2, '总价');
+        // 表头：在出库数量后插入材料单价和计算支撑字段
+        _insertSheetCell(row, outboundQtyIndex, '材料单价');
+        _insertSheetCell(row, outboundQtyIndex + 2, '学生人数');
+        _insertSheetCell(row, outboundQtyIndex + 3, '老师人数');
+        _insertSheetCell(row, outboundQtyIndex + 4, '按组每组出库数量');
+        _insertSheetCell(row, outboundQtyIndex + 5, '每组学生人数');
+        _insertSheetCell(row, outboundQtyIndex + 6, '组数');
+        _insertSheetCell(row, outboundQtyIndex + 7, '材料总数');
+        _insertSheetCell(row, outboundQtyIndex + 8, '总价');
+        // 重命名源数据列
+        row[5] = '按人每人出库数量';
       } else {
         final materialName = _valueText(
           _rowValueAt(sourceRows[i], materialNameIndex),
         );
-        final unitPrice = unitPriceByMaterial[materialName] ?? 0.0;
-        final totalPrice = (sourceRowQuantities[i] ?? 0.0) * unitPrice;
-        _insertSheetCell(row, outboundQtyIndex, _formatFixed2(unitPrice));
-        _insertSheetCell(row, outboundQtyIndex + 2, _formatFixed2(totalPrice));
+        final rawUnitPrice = unitPriceByMaterial[materialName] ?? 0.0;
+        final unitPrice = _roundToSigFigs(rawUnitPrice, 4);
+        final finalQty = sourceRowQuantities[i] ?? 0.0;
+
+        // 从源数据行读取支撑字段
+        final gradeIndex = columnIndex['年级']!;
+        final outboundCategoryIndex = columnIndex['出库类别']!;
+        final eachGroupQtyIndex = columnIndex['每组数量']!;
+        final eachGroupStudentIndex = columnIndex['每组学生人数']!;
+
+        final grade = _valueText(_rowValueAt(sourceRows[i], gradeIndex));
+        final role = _valueText(_rowValueAt(sourceRows[i], 5));
+        final outboundCategory = _valueText(
+          _rowValueAt(sourceRows[i], outboundCategoryIndex),
+        );
+        final eachGroupQty = _valueText(
+          _rowValueAt(sourceRows[i], eachGroupQtyIndex),
+        );
+        final eachGroupStudent = _valueText(
+          _rowValueAt(sourceRows[i], eachGroupStudentIndex),
+        );
+
+        // 计算人数和组数
+        final gradePeople = peopleCounts[grade];
+        final isByGroup = outboundCategory == '按组';
+        String groupCountStr = '';
+        if (isByGroup) {
+          final studentCount = gradePeople != null
+              ? (gradePeople['学生'] ?? 0)
+              : 0;
+          final eachGroupStudentNum =
+              double.tryParse(eachGroupStudent) ?? 1;
+          final double gc = eachGroupStudentNum > 0
+              ? math
+                  .max(1, (studentCount / eachGroupStudentNum).ceil())
+                  .toDouble()
+              : 0.0;
+          groupCountStr = _formatFixed2(gc);
+        }
+
+        _insertSheetCell(row, outboundQtyIndex, unitPrice);
+        _insertSheetCell(row, outboundQtyIndex + 2, isByGroup ? 0 : (gradePeople?['学生'] ?? 0));
+        _insertSheetCell(row, outboundQtyIndex + 3, isByGroup ? 0 : (gradePeople?['老师'] ?? 0));
+        _insertSheetCell(row, outboundQtyIndex + 4, isByGroup ? (double.tryParse(eachGroupQty) ?? 0) : 0);
+        _insertSheetCell(row, outboundQtyIndex + 5, isByGroup ? (double.tryParse(eachGroupStudent) ?? 0) : 0);
+        _insertSheetCell(row, outboundQtyIndex + 6, isByGroup ? (double.tryParse(groupCountStr) ?? 0) : 0);
+        _insertSheetCell(row, outboundQtyIndex + 7, finalQty);
+        _insertSheetCell(row, outboundQtyIndex + 8, 0.0); // 占位，排序后更新公式
+        // 说明列：材料总数计算方式
+        final outboundQtyVal = _valueText(_rowValueAt(sourceRows[i], outboundQtyIndex));
+        final rolePeople = gradePeople?[role] ?? 0;
+        qtyDesc = isByGroup
+            ? '按组每组出库数量×组数=$eachGroupQty×$groupCountStr=${_formatFixed2(finalQty)}'
+            : '按人每人出库数量×人数=$outboundQtyVal×$rolePeople=${_formatFixed2(finalQty)}';
       }
+      // 移除源数据重复列：每组学生人数(17)、每组数量(16)
+      if (row.length > 17) {
+        row.removeAt(17);
+        row.removeAt(16);
+      }
+      // 说明列（Q列）
+      row.add(qtyDesc ?? '材料总数说明');
       result.add(row);
     }
-    return result;
+    // 排序：跳过表头，对数据行排序
+    final header = result.first;
+    final dataRows = result.sublist(1);
+    dataRows.sort((a, b) {
+      final courseA = _valueText(a.length > 2 ? a[2] : null);
+      final courseB = _valueText(b.length > 2 ? b[2] : null);
+      // 公共材料、包装材料固定排最后
+      const bottomCourses = {'公共材料', '包装材料'};
+      final aBottom = bottomCourses.contains(courseA);
+      final bBottom = bottomCourses.contains(courseB);
+      if (aBottom != bBottom) return aBottom ? 1 : -1;
+      // 课程名称排序：数字开头排前面
+      final aNum = _courseSortKey(courseA);
+      final bNum = _courseSortKey(courseB);
+      if (aNum != bNum) return aNum.compareTo(bNum);
+      final cmp = courseA.compareTo(courseB);
+      if (cmp != 0) return cmp;
+      // 第二排序字段：学生在前，老师在后
+      final roleA = _valueText(a.length > 13 ? a[13] : null);
+      final roleB = _valueText(b.length > 13 ? b[13] : null);
+      const roleOrder = {'学生': 0, '老师': 1};
+      return (roleOrder[roleA] ?? 2).compareTo(roleOrder[roleB] ?? 2);
+    });
+    // 排序后重排序号和公式行号
+    for (var j = 0; j < dataRows.length; j++) {
+      final row = dataRows[j];
+      row[0] = j + 1; // 重排序号
+      final excelRow = j + 2; // Excel行号（表头第1行，数据从第2行开始）
+      row[12] = excel.Formula.custom('=E$excelRow*L$excelRow'); // 总价公式
+    }
+    return [header, ...dataRows];
   }
 
   Object? _rowValueAt(List<dynamic> row, int index) {
@@ -538,6 +645,22 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       return null;
     }
     return row[index];
+  }
+
+  double _roundToSigFigs(double value, int sigFigs) {
+    if (value == 0) return 0;
+    final d = (math.log(value.abs()) / math.ln10).ceil();
+    final shift = sigFigs - d;
+    final factor = math.pow(10, shift);
+    return (value * factor).round() / factor;
+  }
+
+  int _courseSortKey(String name) {
+    if (name.isEmpty) return 2;
+    final first = name.substring(0, 1);
+    if (RegExp(r'[0-9]').hasMatch(first)) return 0;
+    if ('一二三四五六七八九十百千万'.contains(first)) return 0;
+    return 1;
   }
 
   void _insertSheetCell(List<dynamic> row, int index, dynamic value) {
@@ -1034,13 +1157,13 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0),
       );
       final headerText = _valueText(headerCell.value);
-      if (headerText.contains('出库数量')) {
+      if (sheetName == '材料单价' && (headerText == '材料单价' || headerText == '材料总数' || headerText == '总价')) {
         highlightColumns.add(col);
       }
-      if (sheetName == '材料单价' && (headerText == '单价' || headerText == '总价')) {
+      if (sheetName != '材料单价' && (headerText.contains('出库数量') || headerText == '材料总数')) {
         highlightColumns.add(col);
       }
-      if (sheetName == '材料单价' && headerText == '单价') {
+      if (sheetName == '材料单价' && headerText == '材料单价') {
         zeroUnitPriceColumns.add(col);
       }
       if (sheetName == '成本计算' && headerText.startsWith('备注')) {
