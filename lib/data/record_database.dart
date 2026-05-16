@@ -1416,6 +1416,43 @@ class RecordDatabase {
         .toList();
   }
 
+  Future<List<InventoryDetailRecord>> fetchPurchaseRecords(
+    String materialName,
+  ) async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT ir.id,
+             ir.material_name,
+             ir.quantity,
+             ir.unit,
+             ir.created_at,
+             r.amount AS amount,
+             r.note AS note,
+             'in' AS record_type
+      FROM $_inventoryTableName ir
+      LEFT JOIN $_tableName r ON ir.record_id = r.id
+      WHERE ir.material_name = ?
+      ORDER BY ir.created_at ASC, ir.id ASC
+      ''',
+      [materialName],
+    );
+    return rows
+        .map(
+          (row) => InventoryDetailRecord(
+            id: row['id'] as int,
+            materialName: row['material_name'] as String,
+            quantity: (row['quantity'] as num).toDouble(),
+            unit: row['unit'] as String?,
+            createdAt: row['created_at'] as String,
+            amount: (row['amount'] as num?)?.toDouble(),
+            note: row['note'] as String?,
+            recordType: row['record_type'] as String,
+          ),
+        )
+        .toList();
+  }
+
   Future<void> upsertInitQuantity({
     required String materialName,
     required String unit,

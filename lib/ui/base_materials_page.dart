@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+
+import 'package:archive/archive.dart';
 
 import 'package:excel/excel.dart' as excel;
 import 'package:file_picker/file_picker.dart';
@@ -309,6 +312,552 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
         });
       }
     }
+  }
+
+  Future<void> _exportPurchaseRecords() async {
+    if (_exporting) {
+      return;
+    }
+    setState(() {
+      _exporting = true;
+    });
+    try {
+      final summaryList = await RecordDatabase.instance
+          .fetchInventorySummary();
+      final purchaseMaterials = summaryList
+          .where((item) => item.purchasedQuantity > 0)
+          .toList();
+      if (purchaseMaterials.isEmpty) {
+        _showMessage('暂无记账入库记录');
+        return;
+      }
+      final filePath = await _savePurchaseXlsx(purchaseMaterials);
+      final shared = await _shareExportFile(filePath);
+      if (!mounted) {
+        return;
+      }
+      _showMessage(shared ? '已导出并唤起分享' : '已导出到 $filePath');
+    } catch (error) {
+      _showMessage('导出失败，请重试');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _exporting = false;
+        });
+      }
+    }
+  }
+
+  Future<String> _savePurchaseXlsx(List<InventorySummary> list) async {
+    final workbook = excel.Excel.createExcel();
+    const mainSheetName = 'Sheet1';
+    final mainSheet = workbook[mainSheetName];
+    workbook.setDefaultSheet(mainSheetName);
+
+    _appendPurchaseSheetRow(
+      sheet: mainSheet,
+      row: ['序号', '材料名称', '入库总数', '金额之和', '单价'],
+    );
+
+    final detailSheetNames = <String, String>{};
+    final detailSheetLayouts = <String, _PurchaseDetailLayout>{};
+    final usedSheetNames = <String>{};
+
+    for (var i = 0; i < list.length; i++) {
+      final item = list[i];
+      final unitPrice = item.purchasedQuantity > 0
+          ? item.totalAmount / item.purchasedQuantity
+          : 0.0;
+      _appendPurchaseSheetRow(
+        sheet: mainSheet,
+        row: [
+          i + 1,
+          item.materialName,
+          _formatPurchaseNumber(item.purchasedQuantity),
+          _formatPurchaseFixed2(item.totalAmount),
+          _formatPurchaseFixed2(unitPrice),
+        ],
+      );
+
+      var rawName = item.materialName;
+      rawName = rawName.replaceAll(RegExp(r'[\\/*?\[\]：:———–]'), '_');
+      if (rawName.length > 31) rawName = rawName.substring(0, 31);
+      var sheetName = rawName;
+      var suffix = 2;
+      while (usedSheetNames.contains(sheetName)) {
+        final maxBase = 31 - '_$suffix'.length;
+        sheetName =
+            '${rawName.substring(0, maxBase.clamp(0, rawName.length))}_$suffix';
+        suffix++;
+      }
+      usedSheetNames.add(sheetName);
+      detailSheetNames[item.materialName] = sheetName;
+
+      final detailRecords = await RecordDatabase.instance
+          .fetchPurchaseRecords(item.materialName);
+      final detailSheet = workbook[sheetName];
+      final layout = _buildPurchaseDetailSheet(
+        sheet: detailSheet,
+        sheetName: sheetName,
+        materialName: item.materialName,
+        unit: item.unit,
+        records: detailRecords,
+      );
+      detailSheetLayouts[item.materialName] = layout;
+    }
+
+    _applyPurchaseStyles(
+      workbook: workbook,
+      mainSheetName: mainSheetName,
+      detailSheetNames: detailSheetNames,
+      detailSheetLayouts: detailSheetLayouts,
+      list: list,
+    );
+
+    final bytes = workbook.save();
+    if (bytes == null) {
+      throw Exception('导出失败');
+    }
+    final frozenBytes = _freezePurchaseHeaderRows(bytes);
+    final hyperBytes = _injectPurchaseHyperlinks(
+      frozenBytes,
+      detailSheetNames,
+      list,
+    );
+    final directory = await _exportDirectory();
+    final fileName = '材料记账导出_${_formatDateTime(DateTime.now())}.xlsx';
+    final exportFile = File(p.join(directory.path, fileName));
+    await exportFile.writeAsBytes(hyperBytes, flush: true);
+    return exportFile.path;
+  }
+
+  _PurchaseDetailLayout _buildPurchaseDetailSheet({
+    required excel.Sheet sheet,
+    required String sheetName,
+    required String materialName,
+    required String? unit,
+    required List<InventoryDetailRecord> records,
+  }) {
+    _appendPurchaseSheetRow(
+      sheet: sheet,
+      row: ['← 返回目录'],
+    );
+    _appendPurchaseSheetRow(
+      sheet: sheet,
+      row: ['材料入库明细', '', '', '', ''],
+    );
+    _appendPurchaseSheetRow(
+      sheet: sheet,
+      row: ['材料名称', materialName, '单位', unit ?? '', ''],
+    );
+    _appendPurchaseSheetRow(sheet: sheet, row: []);
+    _appendPurchaseSheetRow(
+      sheet: sheet,
+      row: ['材料名称', '金额', '数量', '购买日期', '当次单价'],
+    );
+
+    final headerRow = 4;
+    final dataRows = <int>[];
+    for (var i = 0; i < records.length; i++) {
+      final record = records[i];
+      final amount = record.amount ?? 0.0;
+      final unitPrice = record.quantity > 0 ? amount / record.quantity : 0.0;
+      final dateStr = record.createdAt.length >= 10
+          ? record.createdAt.substring(0, 10)
+          : record.createdAt;
+      dataRows.add(sheet.maxRows);
+      _appendPurchaseSheetRow(
+        sheet: sheet,
+        row: [
+          record.materialName,
+          _formatPurchaseFixed2(amount),
+          _formatPurchaseFixed2(record.quantity),
+          dateStr,
+          _formatPurchaseFixed2(unitPrice),
+        ],
+      );
+    }
+
+    final totalAmount = records.fold<double>(
+      0,
+      (sum, r) => sum + (r.amount ?? 0),
+    );
+    final totalQty = records.fold<double>(0, (sum, r) => sum + r.quantity);
+    final avgUnitPrice = totalQty > 0 ? totalAmount / totalQty : 0.0;
+    final summaryRow = sheet.maxRows;
+    _appendPurchaseSheetRow(
+      sheet: sheet,
+      row: ['汇总', _formatPurchaseFixed2(totalAmount), _formatPurchaseFixed2(totalQty), '', _formatPurchaseFixed2(avgUnitPrice)],
+    );
+
+    sheet.setColWidth(0, 32.0);
+    sheet.setColWidth(1, 14.0);
+    sheet.setColWidth(2, 14.0);
+    sheet.setColWidth(3, 16.0);
+    sheet.setColWidth(4, 14.0);
+
+    return _PurchaseDetailLayout(
+      backRow: 0,
+      titleRow: 1,
+      infoRow: 2,
+      headerRow: headerRow,
+      dataRows: dataRows,
+      summaryRow: summaryRow,
+    );
+  }
+
+  void _appendPurchaseSheetRow({
+    required excel.Sheet sheet,
+    required List<dynamic> row,
+  }) {
+    sheet.appendRow(List<dynamic>.from(row, growable: true));
+  }
+
+  dynamic _formatPurchaseNumber(double value) {
+    if (value % 1 == 0) {
+      return value.toInt();
+    }
+    return double.parse(value.toStringAsFixed(2));
+  }
+
+  String _formatPurchaseFixed2(double value) {
+    return value.toStringAsFixed(2);
+  }
+
+  void _applyPurchaseStyles({
+    required excel.Excel workbook,
+    required String mainSheetName,
+    required Map<String, String> detailSheetNames,
+    required Map<String, _PurchaseDetailLayout> detailSheetLayouts,
+    required List<InventorySummary> list,
+  }) {
+    final border = excel.Border(
+      borderStyle: excel.BorderStyle.Thin,
+      borderColorHex: '#FF666666',
+    );
+    final headerStyle = excel.CellStyle(
+      bold: true,
+      fontColorHex: '#FFFFFFFF',
+      backgroundColorHex: '#FF4F81BD',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final normalStyle = excel.CellStyle(
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final linkStyle = excel.CellStyle(
+      fontColorHex: '#FF0563C1',
+      underline: excel.Underline.Single,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final titleStyle = excel.CellStyle(
+      fontColorHex: '#FF1F1F1F',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final sectionTitleStyle = excel.CellStyle(
+      fontColorHex: '#FF1F1F1F',
+      backgroundColorHex: '#FFDCE6F1',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+
+    void setStyle(excel.Sheet s, int col, int row, excel.CellStyle style) {
+      s
+              .cell(
+                excel.CellIndex.indexByColumnRow(
+                  columnIndex: col,
+                  rowIndex: row,
+                ),
+              )
+              .cellStyle =
+          style;
+    }
+
+    void setRowStyle(
+      excel.Sheet s,
+      int row,
+      int colCount,
+      excel.CellStyle style,
+    ) {
+      for (var c = 0; c < colCount; c++) {
+        setStyle(s, c, row, style);
+      }
+    }
+
+    // 主Sheet样式
+    final mainSheet = workbook.tables[mainSheetName];
+    if (mainSheet != null) {
+      setRowStyle(mainSheet, 0, 5, headerStyle);
+      for (var i = 0; i < list.length; i++) {
+        final rowIndex = i + 1;
+        setRowStyle(mainSheet, rowIndex, 5, normalStyle);
+        setStyle(mainSheet, 1, rowIndex, linkStyle);
+      }
+    }
+
+    // 详情Sheet样式
+    for (final entry in detailSheetNames.entries) {
+      final ds = workbook.tables[entry.value];
+      final layout = detailSheetLayouts[entry.key];
+      if (ds == null || layout == null) {
+        continue;
+      }
+      setRowStyle(ds, layout.backRow, 5, normalStyle);
+      setStyle(ds, 0, layout.backRow, linkStyle);
+      setRowStyle(ds, layout.titleRow, 5, titleStyle);
+      setRowStyle(ds, layout.infoRow, 5, sectionTitleStyle);
+      setRowStyle(ds, 3, 5, normalStyle);
+      setRowStyle(ds, layout.headerRow, 5, headerStyle);
+      for (final row in layout.dataRows) {
+        setRowStyle(ds, row, 5, normalStyle);
+      }
+      setRowStyle(ds, layout.summaryRow, 5, sectionTitleStyle);
+    }
+
+    _autoFitPurchaseSheets(workbook);
+  }
+
+  void _autoFitPurchaseSheets(excel.Excel workbook) {
+    for (final sheet in workbook.tables.values) {
+      if (sheet.maxRows <= 0 || sheet.maxCols <= 0) {
+        continue;
+      }
+      for (var col = 0; col < sheet.maxCols; col++) {
+        var maxWidth = 0;
+        for (var row = 0; row < sheet.maxRows; row++) {
+          final cell = sheet.cell(
+            excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row),
+          );
+          final width = _textPurchaseDisplayWidth(cell.value?.toString() ?? '');
+          if (width > maxWidth) {
+            maxWidth = width;
+          }
+        }
+        final targetWidth = (maxWidth + 2).toDouble().clamp(10, 60).toDouble();
+        sheet.setColWidth(col, targetWidth);
+      }
+    }
+  }
+
+  int _textPurchaseDisplayWidth(String text) {
+    if (text.isEmpty) {
+      return 0;
+    }
+    var total = 0;
+    for (final rune in text.runes) {
+      total += rune <= 0x7F ? 1 : 2;
+    }
+    return total;
+  }
+
+  List<int> _freezePurchaseHeaderRows(List<int> xlsxBytes) {
+    final archive = ZipDecoder().decodeBytes(xlsxBytes);
+    for (var i = 0; i < archive.length; i++) {
+      final file = archive[i];
+      if (!file.isFile) {
+        continue;
+      }
+      if (!file.name.startsWith('xl/worksheets/sheet') ||
+          !file.name.endsWith('.xml')) {
+        continue;
+      }
+      final xml = utf8.decode(file.content);
+      final updated = _injectPurchaseFrozenPane(xml);
+      if (updated == xml) {
+        continue;
+      }
+      final updatedBytes = utf8.encode(updated);
+      final replaced = ArchiveFile(
+        file.name,
+        updatedBytes.length,
+        updatedBytes,
+      )
+        ..mode = file.mode
+        ..ownerId = file.ownerId
+        ..groupId = file.groupId
+        ..lastModTime = file.lastModTime
+        ..comment = file.comment
+        ..crc32 = file.crc32
+        ..compress = file.compress
+        ..isFile = file.isFile;
+      archive[i] = replaced;
+    }
+    return ZipEncoder().encode(archive) ?? xlsxBytes;
+  }
+
+  String _injectPurchaseFrozenPane(String xml) {
+    if (xml.contains('state="frozen"') || xml.contains('<pane ')) {
+      return xml;
+    }
+    const pane =
+        '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>';
+    final selfClosing = RegExp(r'<sheetView([^>]*)/>');
+    final selfMatch = selfClosing.firstMatch(xml);
+    if (selfMatch != null) {
+      final attrs = selfMatch.group(1) ?? '';
+      return xml.replaceFirst(
+        selfClosing,
+        '<sheetView$attrs>$pane</sheetView>',
+      );
+    }
+    final opening = RegExp(r'<sheetView([^>]*)>');
+    final openMatch = opening.firstMatch(xml);
+    if (openMatch == null) {
+      return xml;
+    }
+    final index = openMatch.end;
+    return '${xml.substring(0, index)}$pane${xml.substring(index)}';
+  }
+
+  List<int> _injectPurchaseHyperlinks(
+    List<int> xlsxBytes,
+    Map<String, String> detailSheetNames,
+    List<InventorySummary> list,
+  ) {
+    try {
+      final archive = ZipDecoder().decodeBytes(xlsxBytes);
+      final sheetRIds = <String, String>{};
+      final sheetFileMap = <String, String>{};
+      for (final file in archive.files) {
+        if (!file.isFile) continue;
+        if (file.name == 'xl/workbook.xml') {
+          final xml = utf8.decode(file.content as List<int>);
+          final sheetPattern = RegExp(
+            r'<sheet\s[^>]*?name="([^"]+)"[^>]*?r:id="([^"]+)"',
+          );
+          for (final m in sheetPattern.allMatches(xml)) {
+            sheetRIds[m.group(1)!] = m.group(2)!;
+          }
+        }
+        if (file.name == 'xl/_rels/workbook.xml.rels') {
+          final xml = utf8.decode(file.content as List<int>);
+          final relPattern = RegExp(
+            r'<Relationship\s[^>]*?Id="([^"]+)"[^>]*?Target="([^"]+)"',
+          );
+          for (final m in relPattern.allMatches(xml)) {
+            final rId = m.group(1)!;
+            final target = m.group(2)!;
+            for (final entry in sheetRIds.entries) {
+              if (entry.value == rId) {
+                sheetFileMap[entry.key] = 'xl/$target';
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      final mainSheetFile = sheetFileMap['Sheet1'];
+      if (mainSheetFile == null) {
+        return xlsxBytes;
+      }
+
+      final mainHyperlinks = <Map<String, String>>[];
+      for (var i = 0; i < list.length; i++) {
+        final materialName = list[i].materialName;
+        final detailSheetName = detailSheetNames[materialName];
+        if (detailSheetName == null) continue;
+        mainHyperlinks.add({
+          'ref': 'B${i + 2}',
+          'location': "'$detailSheetName'!A1",
+        });
+      }
+
+      final detailHyperlinks = <String, List<Map<String, String>>>{};
+      for (final sheetName in detailSheetNames.values) {
+        detailHyperlinks[sheetName] = [
+          {'ref': 'A1', 'location': "'Sheet1'!A1"},
+        ];
+      }
+
+      final newArchive = Archive();
+      for (final file in archive.files) {
+        if (!file.isFile) {
+          newArchive.addFile(file);
+          continue;
+        }
+
+        var content = file.content as List<int>;
+        final name = file.name;
+        var modified = false;
+
+        if (name == mainSheetFile) {
+          final xml = utf8.decode(content);
+          final updated = _injectPurchaseHyperlinksIntoSheet(
+            xml,
+            mainHyperlinks,
+          );
+          content = utf8.encode(updated);
+          modified = true;
+        }
+
+        for (final entry in detailHyperlinks.entries) {
+          final detailFile = sheetFileMap[entry.key];
+          if (detailFile != null && name == detailFile) {
+            final xml = utf8.decode(content);
+            final updated = _injectPurchaseHyperlinksIntoSheet(
+              xml,
+              entry.value,
+            );
+            content = utf8.encode(updated);
+            modified = true;
+          }
+        }
+
+        if (modified) {
+          final newFile = ArchiveFile(name, content.length, content)
+            ..compress = true;
+          newArchive.addFile(newFile);
+        } else {
+          newArchive.addFile(file);
+        }
+      }
+
+      final result = ZipEncoder().encode(newArchive);
+      if (result == null) {
+        return xlsxBytes;
+      }
+      return result;
+    } catch (e) {
+      return xlsxBytes;
+    }
+  }
+
+  String _injectPurchaseHyperlinksIntoSheet(
+    String xml,
+    List<Map<String, String>> hyperlinks,
+  ) {
+    if (hyperlinks.isEmpty) return xml;
+
+    final buffer = StringBuffer('<hyperlinks>');
+    for (final h in hyperlinks) {
+      final ref = h['ref']!;
+      final location = h['location']!;
+      buffer.write('<hyperlink ref="$ref" location="$location"/>');
+    }
+    buffer.write('</hyperlinks>');
+    final hlXml = buffer.toString();
+
+    final idx = xml.indexOf('<pageMargins');
+    if (idx < 0) {
+      final endIdx = xml.lastIndexOf('</worksheet>');
+      if (endIdx < 0) return xml;
+      return '${xml.substring(0, endIdx)}$hlXml${xml.substring(endIdx)}';
+    }
+    return '${xml.substring(0, idx)}$hlXml${xml.substring(idx)}';
   }
 
   Future<void> _importMaterials() async {
@@ -674,15 +1223,17 @@ class _BaseMaterialsPageState extends State<BaseMaterialsPage> {
       appBar: AppBar(
         title: const Text('基础材料'),
         actions: [
-          IconButton(
+          TextButton(
             onPressed: _importing ? null : _importMaterials,
-            icon: const Icon(Icons.upload_file_outlined),
-            tooltip: '导入 xlsx',
+            child: const Text('导入'),
           ),
-          IconButton(
+          TextButton(
             onPressed: _exporting ? null : _exportMaterials,
-            icon: const Icon(Icons.ios_share_outlined),
-            tooltip: '导出 xlsx',
+            child: const Text('导出'),
+          ),
+          TextButton(
+            onPressed: _exporting ? null : _exportPurchaseRecords,
+            child: const Text('记账导出'),
           ),
         ],
       ),
@@ -1054,4 +1605,22 @@ class _BaseMaterialFormResult {
 
   final String name;
   final String unit;
+}
+
+class _PurchaseDetailLayout {
+  const _PurchaseDetailLayout({
+    required this.backRow,
+    required this.titleRow,
+    required this.infoRow,
+    required this.headerRow,
+    required this.dataRows,
+    required this.summaryRow,
+  });
+
+  final int backRow;
+  final int titleRow;
+  final int infoRow;
+  final int headerRow;
+  final List<int> dataRows;
+  final int summaryRow;
 }
