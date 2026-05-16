@@ -987,29 +987,15 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       courseDetailSheetNames[courseKey] = sheetName;
 
       final detailSheet = workbook[sheetName];
-      final studentCount = peopleCounts[costItem.grade]!['学生'] ?? 0;
-      final teacherCount = peopleCounts[costItem.grade]!['老师'] ?? 0;
       final totalCost = costItem.teacherCost + costItem.studentCost;
-      final costPerStudent = studentCount > 0 ? totalCost / studentCount : 0.0;
-      final sortedDetails = costItem.materialDetails.toList()
-        ..sort((a, b) {
-          final amountCompare = b.amount.compareTo(a.amount);
-          if (amountCompare != 0) {
-            return amountCompare;
-          }
-          const roleOrder = {'学生': 0, '老师': 1};
-          final roleCompare = (roleOrder[a.role] ?? 9).compareTo(
-            roleOrder[b.role] ?? 9,
-          );
-          if (roleCompare != 0) {
-            return roleCompare;
-          }
-          final nameCompare = a.materialName.compareTo(b.materialName);
-          if (nameCompare != 0) {
-            return nameCompare;
-          }
-          return a.outboundCategory.compareTo(b.outboundCategory);
-        });
+      final studentItems = _buildDetailSheetItems(
+        costItem.materialDetails,
+        '学生',
+      );
+      final teacherItems = _buildDetailSheetItems(
+        costItem.materialDetails,
+        '老师',
+      );
 
       _appendSheetRow(
         sheet: detailSheet,
@@ -1019,124 +1005,92 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       _appendSheetRow(
         sheet: detailSheet,
         stage: '$sheetName-标题',
-        row: ['课程成本审核清单', '', '', '', '', '', '', ''],
+        row: ['课程材料成本清单', '', '', ''],
       );
       _appendSheetRow(
         sheet: detailSheet,
         stage: '$sheetName-基础信息',
-        row: [
-          '年级',
-          costItem.grade,
-          '',
-          '课程名称',
-          costItem.courseName,
-          '',
-          '',
-          '',
-        ],
-      );
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-基础信息',
-        row: ['学生人数', studentCount, '', '老师人数', teacherCount, '', '', ''],
-      );
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-汇总',
-        row: [
-          '学生材料总价',
-          _formatFixed2(costItem.studentCost),
-          '',
-          '老师材料总价',
-          _formatFixed2(costItem.teacherCost),
-          '',
-          '',
-          '',
-        ],
-      );
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-汇总',
-        row: [
-          '材料总价',
-          _formatFixed2(totalCost),
-          '',
-          '每生成本',
-          _formatFixed2(costPerStudent),
-          '',
-          '',
-          '',
-        ],
-      );
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-汇总',
-        row: [
-          '老师材料最小值（1组人）',
-          '',
-          '',
-          '',
-          _formatFixed2(costItem.teacherMinimumCost),
-          '',
-          '',
-          '',
-        ],
+        row: ['年级', costItem.grade, '课程名称', costItem.courseName],
       );
       _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-口径标题',
-        row: ['成本计算口径', '', '', '', '', '', '', ''],
-      );
-      for (final note in _buildCourseCostAuditNotes(studentCount)) {
+      if (studentItems.isNotEmpty) {
         _appendSheetRow(
           sheet: detailSheet,
-          stage: '$sheetName-口径说明',
-          row: [note, '', '', '', '', '', '', ''],
+          stage: '$sheetName-学生标题',
+          row: ['学生材料清单', '', '', ''],
+        );
+        _appendSheetRow(
+          sheet: detailSheet,
+          stage: '$sheetName-学生表头',
+          row: ['材料名称', '材料单价', '材料出库数量', '总价'],
+        );
+        for (var i = 0; i < studentItems.length; i++) {
+          final item = studentItems[i];
+          _appendSheetRow(
+            sheet: detailSheet,
+            stage: '$sheetName-学生数据',
+            rowIndex: i + 1,
+            row: [
+              item.materialName,
+              _formatFixed2(item.unitPrice),
+              _formatFixed2(item.quantity),
+              _formatFixed2(item.amount),
+            ],
+          );
+        }
+        _appendSheetRow(
+          sheet: detailSheet,
+          stage: '$sheetName-学生小计',
+          row: ['学生材料小计', '', '', _formatFixed2(costItem.studentCost)],
         );
       }
-      _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-表头',
-        row: ['序号', '材料名称', '角色', '计量方式', '单价', '数量', '金额', '计算说明'],
-      );
-
-      var seq = 0;
-      for (final detail in sortedDetails) {
-        seq++;
+      if (studentItems.isNotEmpty && teacherItems.isNotEmpty) {
+        _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
+        _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
+      }
+      if (teacherItems.isNotEmpty) {
         _appendSheetRow(
           sheet: detailSheet,
-          stage: '$sheetName-数据',
-          rowIndex: seq,
-          row: [
-            seq,
-            detail.materialName,
-            detail.role,
-            detail.outboundCategory,
-            _formatFixed2(detail.unitPrice),
-            _formatFixed2(detail.quantity),
-            _formatFixed2(detail.amount),
-            _buildCourseCostDetailDescription(detail),
-          ],
+          stage: '$sheetName-老师标题',
+          row: ['老师材料清单', '', '', ''],
+        );
+        _appendSheetRow(
+          sheet: detailSheet,
+          stage: '$sheetName-老师表头',
+          row: ['材料名称', '材料单价', '材料出库数量', '总价'],
+        );
+        for (var i = 0; i < teacherItems.length; i++) {
+          final item = teacherItems[i];
+          _appendSheetRow(
+            sheet: detailSheet,
+            stage: '$sheetName-老师数据',
+            rowIndex: i + 1,
+            row: [
+              item.materialName,
+              _formatFixed2(item.unitPrice),
+              _formatFixed2(item.quantity),
+              _formatFixed2(item.amount),
+            ],
+          );
+        }
+        _appendSheetRow(
+          sheet: detailSheet,
+          stage: '$sheetName-老师小计',
+          row: ['老师材料小计', '', '', _formatFixed2(costItem.teacherCost)],
         );
       }
 
       _appendSheetRow(
         sheet: detailSheet,
         stage: '$sheetName-合计',
-        row: ['', '合计', '', '', '', '', _formatFixed2(totalCost), ''],
+        row: ['合计', '', '', _formatFixed2(totalCost)],
       );
 
       // 设置列宽
-      detailSheet.setColWidth(0, 10.0);
-      detailSheet.setColWidth(1, 28.0);
-      detailSheet.setColWidth(2, 10.0);
-      detailSheet.setColWidth(3, 10.0);
-      detailSheet.setColWidth(4, 12.0);
-      detailSheet.setColWidth(5, 12.0);
-      detailSheet.setColWidth(6, 12.0);
-      detailSheet.setColWidth(7, 44.0);
+      detailSheet.setColWidth(0, 32.0);
+      detailSheet.setColWidth(1, 14.0);
+      detailSheet.setColWidth(2, 16.0);
+      detailSheet.setColWidth(3, 14.0);
     }
 
     _appendDebug('开始应用表格样式');
@@ -1175,25 +1129,35 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     return value.toStringAsFixed(2);
   }
 
-  List<String> _buildCourseCostAuditNotes(int studentCount) {
-    final costPerStudentDesc = studentCount > 0
-        ? '每生成本 = 材料总价 / 学生人数'
-        : '每生成本 = 学生人数为0时按0展示';
-    return [
-      '1. 学生材料总价 = 所有“学生”材料行金额之和',
-      '2. 老师材料总价 = 所有“老师”材料行金额之和',
-      '3. 材料总价 = 学生材料总价 + 老师材料总价；$costPerStudentDesc',
-      '4. 老师材料最小值（1组人）= 老师按人材料按实际人数计算，老师按组材料仅按1组计算',
-    ];
-  }
-
-  String _buildCourseCostDetailDescription(_CourseMaterialDetail detail) {
-    final quantityPart = detail.outboundCategory == '按组'
-        ? '按组：每组${_formatFixed2(detail.basisQuantity)} × ${_formatFixed2(detail.multiplierValue)}组 = ${_formatFixed2(detail.quantity)}'
-        : '按人：每人${_formatFixed2(detail.basisQuantity)} × ${_formatFixed2(detail.multiplierValue)}人 = ${_formatFixed2(detail.quantity)}';
-    final amountPart =
-        '金额：${_formatFixed2(detail.quantity)} × ${_formatFixed2(detail.unitPrice)} = ${_formatFixed2(detail.amount)}';
-    return '$quantityPart；$amountPart';
+  List<_DetailSheetMaterialItem> _buildDetailSheetItems(
+    List<_CourseMaterialDetail> details,
+    String role,
+  ) {
+    final merged = <String, _DetailSheetMaterialItem>{};
+    for (final detail in details) {
+      if (detail.role != role) {
+        continue;
+      }
+      final key =
+          '${detail.materialName}__${detail.unitPrice.toStringAsFixed(6)}';
+      final item = merged.putIfAbsent(
+        key,
+        () => _DetailSheetMaterialItem(
+          materialName: detail.materialName,
+          unitPrice: detail.unitPrice,
+        ),
+      );
+      item.quantity += detail.quantity;
+    }
+    final items = merged.values.toList()
+      ..sort((a, b) {
+        final amountCompare = b.amount.compareTo(a.amount);
+        if (amountCompare != 0) {
+          return amountCompare;
+        }
+        return a.materialName.compareTo(b.materialName);
+      });
+    return items;
   }
 
   excel.Data? _cellAt(List<excel.Data?> row, int index) {
@@ -1315,10 +1279,8 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       bottomBorder: border,
     );
     final detailLinkStyle = excel.CellStyle(
-      bold: true,
       fontColorHex: '#FF0563C1',
       underline: excel.Underline.Single,
-      backgroundColorHex: '#FFF4F8FC',
       leftBorder: border,
       rightBorder: border,
       topBorder: border,
@@ -1331,59 +1293,46 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       bottomBorder: border,
     );
     final titleStyle = excel.CellStyle(
-      bold: true,
-      fontColorHex: '#FFFFFFFF',
-      backgroundColorHex: '#FF1F4E78',
+      fontColorHex: '#FF1F1F1F',
       leftBorder: border,
       rightBorder: border,
       topBorder: border,
       bottomBorder: border,
     );
     final infoLabelStyle = excel.CellStyle(
-      bold: true,
-      backgroundColorHex: '#FFEAF2F8',
       leftBorder: border,
       rightBorder: border,
       topBorder: border,
       bottomBorder: border,
     );
     final infoValueStyle = excel.CellStyle(
-      bold: true,
-      backgroundColorHex: '#FFFFFFFF',
-      leftBorder: border,
-      rightBorder: border,
-      topBorder: border,
-      bottomBorder: border,
-    );
-    final noteHeaderStyle = excel.CellStyle(
-      bold: true,
-      backgroundColorHex: '#FFD9EAF7',
-      leftBorder: border,
-      rightBorder: border,
-      topBorder: border,
-      bottomBorder: border,
-    );
-    final noteStyle = excel.CellStyle(
-      backgroundColorHex: '#FFF8FBFE',
-      textWrapping: excel.TextWrapping.WrapText,
       leftBorder: border,
       rightBorder: border,
       topBorder: border,
       bottomBorder: border,
     );
     final tableHeaderStyle = excel.CellStyle(
-      bold: true,
-      fontColorHex: '#FFFFFFFF',
-      backgroundColorHex: '#FF4F81BD',
+      fontColorHex: '#FF1F1F1F',
       textWrapping: excel.TextWrapping.WrapText,
       leftBorder: border,
       rightBorder: border,
       topBorder: border,
       bottomBorder: border,
     );
+    final detailSectionStyle = excel.CellStyle(
+      fontColorHex: '#FF1F1F1F',
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final subtotalStyle = excel.CellStyle(
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
     final totalStyle = excel.CellStyle(
-      bold: true,
-      backgroundColorHex: '#FFFFF2CC',
       leftBorder: border,
       rightBorder: border,
       topBorder: border,
@@ -1432,127 +1381,98 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       final costItem = sortedCosts.firstWhere(
         (c) => '${c.grade}_${c.courseName}' == entry.key,
       );
-      const noteCount = 4;
+      final studentItems = _buildDetailSheetItems(
+        costItem.materialDetails,
+        '学生',
+      );
+      final teacherItems = _buildDetailSheetItems(
+        costItem.materialDetails,
+        '老师',
+      );
       const titleRow = 1;
-      const infoStartRow = 2;
-      const summarySingleRow = 6;
-      const noteHeaderRow = 8;
-      const noteStartRow = 9;
-      const tableHeaderRow = 14;
-      const dataStartRow = 15;
-      final totalRow = dataStartRow + costItem.materialDetails.length;
-
-      ds.merge(
-        excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0),
-        excel.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: 0),
-        customValue: '← 返回成本计算',
-      );
-      ds.merge(
-        excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: titleRow),
-        excel.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: titleRow),
-        customValue: '课程成本审核清单',
-      );
-      for (final rowIndex in [
-        infoStartRow,
-        infoStartRow + 1,
-        infoStartRow + 2,
-        infoStartRow + 3,
-      ]) {
-        ds.merge(
-          excel.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIndex),
-          excel.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIndex),
-        );
-        ds.merge(
-          excel.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIndex),
-          excel.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIndex),
-        );
+      const infoRow = 2;
+      var currentRow = 4;
+      int? studentSectionRow;
+      int? studentHeaderRow;
+      int? studentDataStartRow;
+      int? studentSubtotalRow;
+      if (studentItems.isNotEmpty) {
+        studentSectionRow = currentRow;
+        studentHeaderRow = currentRow + 1;
+        studentDataStartRow = currentRow + 2;
+        studentSubtotalRow = studentDataStartRow + studentItems.length;
+        currentRow = studentSubtotalRow + 1;
       }
-      ds.merge(
-        excel.CellIndex.indexByColumnRow(
-          columnIndex: 0,
-          rowIndex: summarySingleRow,
-        ),
-        excel.CellIndex.indexByColumnRow(
-          columnIndex: 3,
-          rowIndex: summarySingleRow,
-        ),
-      );
-      ds.merge(
-        excel.CellIndex.indexByColumnRow(
-          columnIndex: 4,
-          rowIndex: summarySingleRow,
-        ),
-        excel.CellIndex.indexByColumnRow(
-          columnIndex: 7,
-          rowIndex: summarySingleRow,
-        ),
-      );
-      ds.merge(
-        excel.CellIndex.indexByColumnRow(
-          columnIndex: 0,
-          rowIndex: noteHeaderRow,
-        ),
-        excel.CellIndex.indexByColumnRow(
-          columnIndex: 7,
-          rowIndex: noteHeaderRow,
-        ),
-        customValue: '成本计算口径',
-      );
-      for (
-        var rowIndex = noteStartRow;
-        rowIndex < noteStartRow + noteCount;
-        rowIndex++
-      ) {
-        ds.merge(
-          excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIndex),
-          excel.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIndex),
-        );
+      int? teacherGapRow1;
+      int? teacherGapRow2;
+      int? teacherSectionRow;
+      int? teacherHeaderRow;
+      int? teacherDataStartRow;
+      int? teacherSubtotalRow;
+      if (teacherItems.isNotEmpty) {
+        if (studentItems.isNotEmpty) {
+          teacherGapRow1 = currentRow;
+          teacherGapRow2 = currentRow + 1;
+          currentRow += 2;
+        }
+        teacherSectionRow = currentRow;
+        teacherHeaderRow = currentRow + 1;
+        teacherDataStartRow = currentRow + 2;
+        teacherSubtotalRow = teacherDataStartRow + teacherItems.length;
+        currentRow = teacherSubtotalRow + 1;
       }
-      ds.merge(
-        excel.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: totalRow),
-        excel.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: totalRow),
-      );
+      final totalRow = currentRow;
 
-      setRowStyle(ds, 0, 8, normalStyle);
+      setRowStyle(ds, 0, 4, normalStyle);
       setStyle(ds, 0, 0, detailLinkStyle);
-      setStyle(ds, 0, titleRow, titleStyle);
-      for (final rowIndex in [
-        infoStartRow,
-        infoStartRow + 1,
-        infoStartRow + 2,
-        infoStartRow + 3,
-      ]) {
-        setStyle(ds, 0, rowIndex, infoLabelStyle);
-        setStyle(ds, 1, rowIndex, infoValueStyle);
-        setStyle(ds, 3, rowIndex, infoLabelStyle);
-        setStyle(ds, 4, rowIndex, infoValueStyle);
+      setRowStyle(ds, titleRow, 4, titleStyle);
+      setStyle(ds, 0, infoRow, infoLabelStyle);
+      setStyle(ds, 1, infoRow, infoValueStyle);
+      setStyle(ds, 2, infoRow, infoLabelStyle);
+      setStyle(ds, 3, infoRow, infoValueStyle);
+      setRowStyle(ds, 3, 4, normalStyle);
+      if (studentSectionRow != null &&
+          studentHeaderRow != null &&
+          studentDataStartRow != null &&
+          studentSubtotalRow != null) {
+        setRowStyle(ds, studentSectionRow, 4, detailSectionStyle);
+        setRowStyle(ds, studentHeaderRow, 4, tableHeaderStyle);
+        for (
+          var rowIndex = studentDataStartRow;
+          rowIndex < studentSubtotalRow;
+          rowIndex++
+        ) {
+          setRowStyle(ds, rowIndex, 4, normalStyle);
+        }
+        setRowStyle(ds, studentSubtotalRow, 4, subtotalStyle);
       }
-      setStyle(ds, 0, summarySingleRow, infoLabelStyle);
-      setStyle(ds, 4, summarySingleRow, infoValueStyle);
-      setRowStyle(ds, 7, 8, normalStyle);
-      setStyle(ds, 0, noteHeaderRow, noteHeaderStyle);
-      for (
-        var rowIndex = noteStartRow;
-        rowIndex < noteStartRow + noteCount;
-        rowIndex++
-      ) {
-        setStyle(ds, 0, rowIndex, noteStyle);
+      if (teacherGapRow1 != null) {
+        setRowStyle(ds, teacherGapRow1, 4, normalStyle);
       }
-      setRowStyle(ds, 13, 8, normalStyle);
-      setRowStyle(ds, tableHeaderRow, 8, tableHeaderStyle);
-      for (var rowIndex = dataStartRow; rowIndex < totalRow; rowIndex++) {
-        setRowStyle(ds, rowIndex, 8, normalStyle);
+      if (teacherGapRow2 != null) {
+        setRowStyle(ds, teacherGapRow2, 4, normalStyle);
       }
-      setRowStyle(ds, totalRow, 8, totalStyle);
+      if (teacherSectionRow != null &&
+          teacherHeaderRow != null &&
+          teacherDataStartRow != null &&
+          teacherSubtotalRow != null) {
+        setRowStyle(ds, teacherSectionRow, 4, detailSectionStyle);
+        setRowStyle(ds, teacherHeaderRow, 4, tableHeaderStyle);
+        for (
+          var rowIndex = teacherDataStartRow;
+          rowIndex < teacherSubtotalRow;
+          rowIndex++
+        ) {
+          setRowStyle(ds, rowIndex, 4, normalStyle);
+        }
+        setRowStyle(ds, teacherSubtotalRow, 4, subtotalStyle);
+      }
+      setRowStyle(ds, totalRow, 4, totalStyle);
 
-      ds.setColWidth(0, 12.0);
-      ds.setColWidth(1, 28.0);
-      ds.setColWidth(2, 10.0);
-      ds.setColWidth(3, 12.0);
-      ds.setColWidth(4, 14.0);
-      ds.setColWidth(5, 12.0);
-      ds.setColWidth(6, 14.0);
-      ds.setColWidth(7, 52.0);
+      ds.setColWidth(0, 32.0);
+      ds.setColWidth(1, 14.0);
+      ds.setColWidth(2, 16.0);
+      ds.setColWidth(3, 14.0);
     }
   }
 
@@ -1569,6 +1489,15 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     );
     final headerStyle = excel.CellStyle(
       bold: true,
+      fontColorHex: '#FFFFFFFF',
+      backgroundColorHex: '#FF4F81BD',
+      textWrapping: excel.TextWrapping.WrapText,
+      leftBorder: border,
+      rightBorder: border,
+      topBorder: border,
+      bottomBorder: border,
+    );
+    final costHeaderStyle = excel.CellStyle(
       fontColorHex: '#FFFFFFFF',
       backgroundColorHex: '#FF4F81BD',
       textWrapping: excel.TextWrapping.WrapText,
@@ -1595,6 +1524,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         sheet: sheet,
         normalStyle: normalStyle,
         headerStyle: headerStyle,
+        costHeaderStyle: costHeaderStyle,
         highlightStyle: highlightStyle,
         sheetName: sheetName,
       );
@@ -1606,6 +1536,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
     required excel.Sheet sheet,
     required excel.CellStyle normalStyle,
     required excel.CellStyle headerStyle,
+    required excel.CellStyle costHeaderStyle,
     required excel.CellStyle highlightStyle,
     required String sheetName,
   }) {
@@ -1660,7 +1591,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
           excel.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row),
         );
         if (row == 0) {
-          cell.cellStyle = headerStyle;
+          cell.cellStyle = sheetName == '成本计算' ? costHeaderStyle : headerStyle;
           continue;
         }
         if (remainingInventoryColumns.contains(col)) {
@@ -2386,6 +2317,19 @@ class _CourseMaterialDetail {
   final String outboundCategory; // 按人/按组
   final double basisQuantity; // 按人时为每人数量，按组时为每组数量
   final double multiplierValue; // 按人时为人数，按组时为组数
+
+  double get amount => quantity * unitPrice;
+}
+
+class _DetailSheetMaterialItem {
+  _DetailSheetMaterialItem({
+    required this.materialName,
+    required this.unitPrice,
+  });
+
+  final String materialName;
+  final double unitPrice;
+  double quantity = 0;
 
   double get amount => quantity * unitPrice;
 }
