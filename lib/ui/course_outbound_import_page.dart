@@ -901,9 +901,17 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         '最大成本项',
       ],
     );
-    // 按材料总价从高到低排序
+    // 排序：包装材料/公共材料置底 > 第X课按序号排 > 其余按材料总价降序
     final sortedCosts = aggregate.courseCosts.toList()
       ..sort((a, b) {
+        final aIsBottom = _isBottomCourse(a.courseName);
+        final bIsBottom = _isBottomCourse(b.courseName);
+        if (aIsBottom != bIsBottom) return aIsBottom ? 1 : -1;
+        final aNum = _extractCourseNumber(a.courseName);
+        final bNum = _extractCourseNumber(b.courseName);
+        if (aNum != null && bNum != null) return aNum.compareTo(bNum);
+        if (aNum != null) return -1;
+        if (bNum != null) return 1;
         final aTotal = a.teacherCost + a.studentCost;
         final bTotal = b.teacherCost + b.studentCost;
         return bTotal.compareTo(aTotal);
@@ -967,6 +975,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
 
     // 课程详情Sheet：为每个课程创建材料成本明细
     final courseDetailSheetNames = <String, String>{}; // courseKey -> sheetName
+    final courseDetailLayouts = <String, _DetailSheetLayout>{}; // courseKey -> layout
     final usedSheetNames = <String>{};
     for (var i = 0; i < sortedCosts.length; i++) {
       final costItem = sortedCosts[i];
@@ -987,7 +996,6 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       courseDetailSheetNames[courseKey] = sheetName;
 
       final detailSheet = workbook[sheetName];
-      final totalCost = costItem.teacherCost + costItem.studentCost;
       final studentItems = _buildDetailSheetItems(
         costItem.materialDetails,
         '学生',
@@ -997,100 +1005,14 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
         '老师',
       );
 
-      _appendSheetRow(
+      final layout = _buildDetailSheet(
         sheet: detailSheet,
-        stage: '$sheetName-返回',
-        row: ['← 返回成本计算'],
+        sheetName: sheetName,
+        costItem: costItem,
+        studentItems: studentItems,
+        teacherItems: teacherItems,
       );
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-标题',
-        row: ['课程材料成本清单', '', '', ''],
-      );
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-基础信息',
-        row: ['年级', costItem.grade, '课程名称', costItem.courseName],
-      );
-      _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
-      if (studentItems.isNotEmpty) {
-        _appendSheetRow(
-          sheet: detailSheet,
-          stage: '$sheetName-学生标题',
-          row: ['学生材料清单', '', '', ''],
-        );
-        _appendSheetRow(
-          sheet: detailSheet,
-          stage: '$sheetName-学生表头',
-          row: ['材料名称', '材料单价', '材料出库数量', '总价'],
-        );
-        for (var i = 0; i < studentItems.length; i++) {
-          final item = studentItems[i];
-          _appendSheetRow(
-            sheet: detailSheet,
-            stage: '$sheetName-学生数据',
-            rowIndex: i + 1,
-            row: [
-              item.materialName,
-              _formatFixed2(item.unitPrice),
-              _formatFixed2(item.quantity),
-              _formatFixed2(item.amount),
-            ],
-          );
-        }
-        _appendSheetRow(
-          sheet: detailSheet,
-          stage: '$sheetName-学生小计',
-          row: ['学生材料小计', '', '', _formatFixed2(costItem.studentCost)],
-        );
-      }
-      if (studentItems.isNotEmpty && teacherItems.isNotEmpty) {
-        _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
-        _appendSheetRow(sheet: detailSheet, stage: '$sheetName-空行', row: []);
-      }
-      if (teacherItems.isNotEmpty) {
-        _appendSheetRow(
-          sheet: detailSheet,
-          stage: '$sheetName-老师标题',
-          row: ['老师材料清单', '', '', ''],
-        );
-        _appendSheetRow(
-          sheet: detailSheet,
-          stage: '$sheetName-老师表头',
-          row: ['材料名称', '材料单价', '材料出库数量', '总价'],
-        );
-        for (var i = 0; i < teacherItems.length; i++) {
-          final item = teacherItems[i];
-          _appendSheetRow(
-            sheet: detailSheet,
-            stage: '$sheetName-老师数据',
-            rowIndex: i + 1,
-            row: [
-              item.materialName,
-              _formatFixed2(item.unitPrice),
-              _formatFixed2(item.quantity),
-              _formatFixed2(item.amount),
-            ],
-          );
-        }
-        _appendSheetRow(
-          sheet: detailSheet,
-          stage: '$sheetName-老师小计',
-          row: ['老师材料小计', '', '', _formatFixed2(costItem.teacherCost)],
-        );
-      }
-
-      _appendSheetRow(
-        sheet: detailSheet,
-        stage: '$sheetName-合计',
-        row: ['合计', '', '', _formatFixed2(totalCost)],
-      );
-
-      // 设置列宽
-      detailSheet.setColWidth(0, 32.0);
-      detailSheet.setColWidth(1, 14.0);
-      detailSheet.setColWidth(2, 16.0);
-      detailSheet.setColWidth(3, 14.0);
+      courseDetailLayouts[courseKey] = layout;
     }
 
     _appendDebug('开始应用表格样式');
@@ -1098,7 +1020,12 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       workbook,
       skipSheets: courseDetailSheetNames.values.toSet(),
     );
-    _applyHyperlinkStyles(workbook, courseDetailSheetNames, sortedCosts);
+    _applyHyperlinkStyles(
+      workbook,
+      courseDetailSheetNames,
+      courseDetailLayouts,
+      sortedCosts,
+    );
     _appendDebug('开始保存xlsx文件');
     final bytes = workbook.save();
     if (bytes == null) {
@@ -1127,6 +1054,167 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
 
   String _formatFixed2(double value) {
     return value.toStringAsFixed(2);
+  }
+
+  /// 提取课程名称中的数字序号，如"第1课时"→1，"第三课"→3
+  int? _extractCourseNumber(String name) {
+    final m = RegExp(r'第(\d+)').firstMatch(name);
+    if (m != null) return int.parse(m.group(1)!);
+    const cnNum = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10};
+    final m2 = RegExp(r'第([一二三四五六七八九十]+)').firstMatch(name);
+    if (m2 != null) return cnNum[m2.group(1)!];
+    return null;
+  }
+
+  bool _isBottomCourse(String name) {
+    return name == '包装材料' || name == '公共材料';
+  }
+
+  /// 写入课程详情Sheet数据，返回布局对象记录各行行号
+  _DetailSheetLayout _buildDetailSheet({
+    required excel.Sheet sheet,
+    required String sheetName,
+    required _CourseCostItem costItem,
+    required List<_DetailSheetMaterialItem> studentItems,
+    required List<_DetailSheetMaterialItem> teacherItems,
+  }) {
+    final totalCost = costItem.teacherCost + costItem.studentCost;
+
+    _appendSheetRow(
+      sheet: sheet,
+      stage: '$sheetName-返回',
+      row: ['← 返回成本计算'],
+    );
+    _appendSheetRow(
+      sheet: sheet,
+      stage: '$sheetName-标题',
+      row: ['课程材料成本清单', '', '', ''],
+    );
+    _appendSheetRow(
+      sheet: sheet,
+      stage: '$sheetName-基础信息',
+      row: ['年级', costItem.grade, '课程名称', costItem.courseName],
+    );
+    _appendSheetRow(sheet: sheet, stage: '$sheetName-空行', row: []);
+
+    final backRow = 0;
+    final titleRow = 1;
+    final infoRow = 2;
+
+    int? studentSectionTitleRow;
+    int? studentHeaderRow;
+    final studentDataRows = <int>[];
+    int? studentSubtotalRow;
+
+    if (studentItems.isNotEmpty) {
+      studentSectionTitleRow = sheet.maxRows;
+      _appendSheetRow(
+        sheet: sheet,
+        stage: '$sheetName-学生标题',
+        row: ['学生材料清单', '', '', ''],
+      );
+      studentHeaderRow = sheet.maxRows;
+      _appendSheetRow(
+        sheet: sheet,
+        stage: '$sheetName-学生表头',
+        row: ['材料名称', '材料单价', '材料出库数量', '总价'],
+      );
+      for (var i = 0; i < studentItems.length; i++) {
+        final item = studentItems[i];
+        studentDataRows.add(sheet.maxRows);
+        _appendSheetRow(
+          sheet: sheet,
+          stage: '$sheetName-学生数据',
+          rowIndex: i + 1,
+          row: [
+            item.materialName,
+            item.unitPrice,
+            item.quantity,
+            item.amount,
+          ],
+        );
+      }
+      studentSubtotalRow = sheet.maxRows;
+      _appendSheetRow(
+        sheet: sheet,
+        stage: '$sheetName-学生小计',
+        row: ['学生材料小计', '', '', costItem.studentCost],
+      );
+    }
+
+    if (studentItems.isNotEmpty && teacherItems.isNotEmpty) {
+      _appendSheetRow(sheet: sheet, stage: '$sheetName-空行', row: []);
+      _appendSheetRow(sheet: sheet, stage: '$sheetName-空行', row: []);
+    }
+
+    int? teacherSectionTitleRow;
+    int? teacherHeaderRow;
+    final teacherDataRows = <int>[];
+    int? teacherSubtotalRow;
+
+    if (teacherItems.isNotEmpty) {
+      teacherSectionTitleRow = sheet.maxRows;
+      _appendSheetRow(
+        sheet: sheet,
+        stage: '$sheetName-老师标题',
+        row: ['老师材料清单', '', '', ''],
+      );
+      teacherHeaderRow = sheet.maxRows;
+      _appendSheetRow(
+        sheet: sheet,
+        stage: '$sheetName-老师表头',
+        row: ['材料名称', '材料单价', '材料出库数量', '总价'],
+      );
+      for (var i = 0; i < teacherItems.length; i++) {
+        final item = teacherItems[i];
+        teacherDataRows.add(sheet.maxRows);
+        _appendSheetRow(
+          sheet: sheet,
+          stage: '$sheetName-老师数据',
+          rowIndex: i + 1,
+          row: [
+            item.materialName,
+            item.unitPrice,
+            item.quantity,
+            item.amount,
+          ],
+        );
+      }
+      teacherSubtotalRow = sheet.maxRows;
+      _appendSheetRow(
+        sheet: sheet,
+        stage: '$sheetName-老师小计',
+        row: ['老师材料小计', '', '', costItem.teacherCost],
+      );
+    }
+
+    final totalRow = sheet.maxRows;
+    _appendSheetRow(
+      sheet: sheet,
+      stage: '$sheetName-合计',
+      row: ['合计', '', '', totalCost],
+    );
+
+    // 设置列宽
+    sheet.setColWidth(0, 32.0);
+    sheet.setColWidth(1, 14.0);
+    sheet.setColWidth(2, 16.0);
+    sheet.setColWidth(3, 14.0);
+
+    return _DetailSheetLayout(
+      backRow: backRow,
+      titleRow: titleRow,
+      infoRow: infoRow,
+      studentSectionTitleRow: studentSectionTitleRow,
+      studentHeaderRow: studentHeaderRow,
+      studentDataRows: studentDataRows,
+      studentSubtotalRow: studentSubtotalRow,
+      teacherSectionTitleRow: teacherSectionTitleRow,
+      teacherHeaderRow: teacherHeaderRow,
+      teacherDataRows: teacherDataRows,
+      teacherSubtotalRow: teacherSubtotalRow,
+      totalRow: totalRow,
+    );
   }
 
   List<_DetailSheetMaterialItem> _buildDetailSheetItems(
@@ -1264,6 +1352,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
   void _applyHyperlinkStyles(
     excel.Excel workbook,
     Map<String, String> courseDetailSheetNames,
+    Map<String, _DetailSheetLayout> courseDetailLayouts,
     List<_CourseCostItem> sortedCosts,
   ) {
     final border = excel.Border(
@@ -1319,8 +1408,9 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       topBorder: border,
       bottomBorder: border,
     );
-    final detailSectionStyle = excel.CellStyle(
+    final sectionTitleStyle = excel.CellStyle(
       fontColorHex: '#FF1F1F1F',
+      backgroundColorHex: '#FFDCE6F1',
       leftBorder: border,
       rightBorder: border,
       topBorder: border,
@@ -1339,6 +1429,7 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       bottomBorder: border,
     );
 
+    // 成本计算Sheet：课程名称列加超链接样式
     final costSheet = workbook.tables['成本计算'];
     if (costSheet != null) {
       for (var i = 0; i < sortedCosts.length; i++) {
@@ -1372,107 +1463,58 @@ class _CourseOutboundImportPageState extends State<CourseOutboundImportPage> {
       }
     }
 
+    // 课程详情Sheet：使用布局对象直接设置样式
     for (final entry in courseDetailSheetNames.entries) {
       final sheetName = entry.value;
       final ds = workbook.tables[sheetName];
-      if (ds == null) {
+      final layout = courseDetailLayouts[entry.key];
+      if (ds == null || layout == null) {
         continue;
       }
-      final costItem = sortedCosts.firstWhere(
-        (c) => '${c.grade}_${c.courseName}' == entry.key,
-      );
-      final studentItems = _buildDetailSheetItems(
-        costItem.materialDetails,
-        '学生',
-      );
-      final teacherItems = _buildDetailSheetItems(
-        costItem.materialDetails,
-        '老师',
-      );
-      const titleRow = 1;
-      const infoRow = 2;
-      var currentRow = 4;
-      int? studentSectionRow;
-      int? studentHeaderRow;
-      int? studentDataStartRow;
-      int? studentSubtotalRow;
-      if (studentItems.isNotEmpty) {
-        studentSectionRow = currentRow;
-        studentHeaderRow = currentRow + 1;
-        studentDataStartRow = currentRow + 2;
-        studentSubtotalRow = studentDataStartRow + studentItems.length;
-        currentRow = studentSubtotalRow + 1;
-      }
-      int? teacherGapRow1;
-      int? teacherGapRow2;
-      int? teacherSectionRow;
-      int? teacherHeaderRow;
-      int? teacherDataStartRow;
-      int? teacherSubtotalRow;
-      if (teacherItems.isNotEmpty) {
-        if (studentItems.isNotEmpty) {
-          teacherGapRow1 = currentRow;
-          teacherGapRow2 = currentRow + 1;
-          currentRow += 2;
-        }
-        teacherSectionRow = currentRow;
-        teacherHeaderRow = currentRow + 1;
-        teacherDataStartRow = currentRow + 2;
-        teacherSubtotalRow = teacherDataStartRow + teacherItems.length;
-        currentRow = teacherSubtotalRow + 1;
-      }
-      final totalRow = currentRow;
 
-      setRowStyle(ds, 0, 4, normalStyle);
-      setStyle(ds, 0, 0, detailLinkStyle);
-      setRowStyle(ds, titleRow, 4, titleStyle);
-      setStyle(ds, 0, infoRow, infoLabelStyle);
-      setStyle(ds, 1, infoRow, infoValueStyle);
-      setStyle(ds, 2, infoRow, infoLabelStyle);
-      setStyle(ds, 3, infoRow, infoValueStyle);
+      // 返回链接行
+      setRowStyle(ds, layout.backRow, 4, normalStyle);
+      setStyle(ds, 0, layout.backRow, detailLinkStyle);
+      // 标题行
+      setRowStyle(ds, layout.titleRow, 4, titleStyle);
+      // 信息行
+      setStyle(ds, 0, layout.infoRow, infoLabelStyle);
+      setStyle(ds, 1, layout.infoRow, infoValueStyle);
+      setStyle(ds, 2, layout.infoRow, infoLabelStyle);
+      setStyle(ds, 3, layout.infoRow, infoValueStyle);
+      // 空行
       setRowStyle(ds, 3, 4, normalStyle);
-      if (studentSectionRow != null &&
-          studentHeaderRow != null &&
-          studentDataStartRow != null &&
-          studentSubtotalRow != null) {
-        setRowStyle(ds, studentSectionRow, 4, detailSectionStyle);
-        setRowStyle(ds, studentHeaderRow, 4, tableHeaderStyle);
-        for (
-          var rowIndex = studentDataStartRow;
-          rowIndex < studentSubtotalRow;
-          rowIndex++
-        ) {
-          setRowStyle(ds, rowIndex, 4, normalStyle);
-        }
-        setRowStyle(ds, studentSubtotalRow, 4, subtotalStyle);
-      }
-      if (teacherGapRow1 != null) {
-        setRowStyle(ds, teacherGapRow1, 4, normalStyle);
-      }
-      if (teacherGapRow2 != null) {
-        setRowStyle(ds, teacherGapRow2, 4, normalStyle);
-      }
-      if (teacherSectionRow != null &&
-          teacherHeaderRow != null &&
-          teacherDataStartRow != null &&
-          teacherSubtotalRow != null) {
-        setRowStyle(ds, teacherSectionRow, 4, detailSectionStyle);
-        setRowStyle(ds, teacherHeaderRow, 4, tableHeaderStyle);
-        for (
-          var rowIndex = teacherDataStartRow;
-          rowIndex < teacherSubtotalRow;
-          rowIndex++
-        ) {
-          setRowStyle(ds, rowIndex, 4, normalStyle);
-        }
-        setRowStyle(ds, teacherSubtotalRow, 4, subtotalStyle);
-      }
-      setRowStyle(ds, totalRow, 4, totalStyle);
 
-      ds.setColWidth(0, 32.0);
-      ds.setColWidth(1, 14.0);
-      ds.setColWidth(2, 16.0);
-      ds.setColWidth(3, 14.0);
+      // 学生材料区块
+      if (layout.studentSectionTitleRow != null) {
+        setRowStyle(ds, layout.studentSectionTitleRow!, 4, sectionTitleStyle);
+      }
+      if (layout.studentHeaderRow != null) {
+        setRowStyle(ds, layout.studentHeaderRow!, 4, tableHeaderStyle);
+      }
+      for (final row in layout.studentDataRows) {
+        setRowStyle(ds, row, 4, normalStyle);
+      }
+      if (layout.studentSubtotalRow != null) {
+        setRowStyle(ds, layout.studentSubtotalRow!, 4, subtotalStyle);
+      }
+
+      // 老师材料区块
+      if (layout.teacherSectionTitleRow != null) {
+        setRowStyle(ds, layout.teacherSectionTitleRow!, 4, sectionTitleStyle);
+      }
+      if (layout.teacherHeaderRow != null) {
+        setRowStyle(ds, layout.teacherHeaderRow!, 4, tableHeaderStyle);
+      }
+      for (final row in layout.teacherDataRows) {
+        setRowStyle(ds, row, 4, normalStyle);
+      }
+      if (layout.teacherSubtotalRow != null) {
+        setRowStyle(ds, layout.teacherSubtotalRow!, 4, subtotalStyle);
+      }
+
+      // 合计行
+      setRowStyle(ds, layout.totalRow, 4, totalStyle);
     }
   }
 
@@ -2319,6 +2361,37 @@ class _CourseMaterialDetail {
   final double multiplierValue; // 按人时为人数，按组时为组数
 
   double get amount => quantity * unitPrice;
+}
+
+/// 课程详情Sheet的行布局，记录各种行的实际行号
+class _DetailSheetLayout {
+  const _DetailSheetLayout({
+    required this.backRow,
+    required this.titleRow,
+    required this.infoRow,
+    required this.studentSectionTitleRow,
+    required this.studentHeaderRow,
+    required this.studentDataRows,
+    required this.studentSubtotalRow,
+    required this.teacherSectionTitleRow,
+    required this.teacherHeaderRow,
+    required this.teacherDataRows,
+    required this.teacherSubtotalRow,
+    required this.totalRow,
+  });
+
+  final int backRow; // ← 返回成本计算
+  final int titleRow; // 课程材料成本清单
+  final int infoRow; // 年级/课程名称
+  final int? studentSectionTitleRow; // 学生材料清单
+  final int? studentHeaderRow; // 材料名称/单价/数量/总价
+  final List<int> studentDataRows; // 学生数据行
+  final int? studentSubtotalRow; // 学生材料小计
+  final int? teacherSectionTitleRow; // 老师材料清单
+  final int? teacherHeaderRow; // 材料名称/单价/数量/总价
+  final List<int> teacherDataRows; // 老师数据行
+  final int? teacherSubtotalRow; // 老师材料小计
+  final int totalRow; // 合计
 }
 
 class _DetailSheetMaterialItem {
