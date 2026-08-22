@@ -11,7 +11,10 @@
       "Bash(flutter build *)",
       "Bash(git config *)",
       "Bash(export PATH=\"/c/Program Files/Rizin/bin:$PATH\")",
-      "Bash(rizin -q -c ' *)"
+      "Bash(rizin -q -c ' *)",
+      "Bash(git fetch *)",
+      "Bash(python *)",
+      "Bash(PYTHONUTF8=1 python *)"
     ]
   }
 }

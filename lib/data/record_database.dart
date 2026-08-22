@@ -1664,6 +1664,31 @@ class RecordDatabase {
     return maps.map(InventoryOutRecord.fromMap).toList();
   }
 
+  // 出库报表：按出库日期区间（含起止）查出库记录，默认按出库日期升序
+  Future<List<InventoryOutRecord>> fetchOutRecordsForReport({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    final db = await database;
+    final where = <String>[];
+    final args = <Object?>[];
+    if (startDate != null) {
+      where.add('date(created_at) >= date(?)');
+      args.add(startDate.toIso8601String());
+    }
+    if (endDate != null) {
+      where.add('date(created_at) <= date(?)');
+      args.add(endDate.toIso8601String());
+    }
+    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final maps = await db.rawQuery('''
+      SELECT * FROM $_inventoryOutTableName
+      $whereSql
+      ORDER BY created_at ASC, id ASC
+    ''', args);
+    return maps.map(InventoryOutRecord.fromMap).toList();
+  }
+
   Future<int> deleteOutBatch(int batchId) async {
     final db = await database;
     return db.transaction((txn) async {

@@ -6,6 +6,7 @@ import 'base_materials_page.dart';
 import 'course_outbound_import_page.dart';
 import 'material_bill_batch_import_page.dart';
 import 'project_material_relation_page.dart';
+import 'report_center_page.dart';
 
 // 扩展功能入口页
 class ExtensionMenuPage extends StatelessWidget {
@@ -47,17 +48,17 @@ class ExtensionMenuPage extends StatelessWidget {
         icon: Icons.account_tree_outlined,
         builder: (context) => const ProjectMaterialRelationPage(),
       ),
-      const ExtensionMenuItem(
-        title: '账单数据导出',
-        subtitle: '筛选后导出账单',
-        icon: Icons.file_download_outlined,
-        action: 'bill_export',
-      ),
       ExtensionMenuItem(
         title: '批量导入材料账单',
         subtitle: '下载模板后批量生成材料采购账单',
         icon: Icons.post_add_outlined,
         builder: (context) => const MaterialBillBatchImportPage(),
+      ),
+      ExtensionMenuItem(
+        title: '报表中心',
+        subtitle: '多维度报表查询与导出',
+        icon: Icons.assessment_outlined,
+        builder: (context) => const ReportCenterPage(),
       ),
     ];
 
@@ -122,7 +123,15 @@ class ExtensionMenuCard extends StatelessWidget {
         if (item.builder == null) {
           return;
         }
-        Navigator.of(context).push(MaterialPageRoute(builder: item.builder!));
+        final navigator = Navigator.of(context);
+        navigator
+            .push(MaterialPageRoute(builder: item.builder!))
+            .then((result) {
+          // 子页面（如报表中心）以 action 字符串出栈时继续向上透传
+          if (result is String) {
+            navigator.pop(result);
+          }
+        });
       },
       child: Ink(
         decoration: BoxDecoration(
